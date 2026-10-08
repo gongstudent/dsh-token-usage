@@ -1,0 +1,179 @@
+# dsh-token-usage
+
+DeepSeek Harness 的 **token 用量查看器**。三个挂载面：输入框读数、侧栏卡片、设置页报表。**只统计 token 数量,不做任何费用换算。**
+
+只读、无持久化、无宿主业务逻辑、不引入任何 Harness Client 包。
+
+## 它显示什么
+
+### 一、输入框区域（`conversation.composer.dock`）
+
+折叠态一行，和宿主自带的上下文环并排（**不含命中率**）：
+
+`
+▮▮▮ 输入 3.1k · 缓存 41.9k · 输出 1.5k
+`
+
+点开是明细面板（固定在触发元素上方，不 portal、不占文档流）：
+
+`
+本会话 Token 用量
+模型            deepseek-flash
+未命中输入        3.1k
+缓存读           41.9k
+缓存写            2.0k
+输出              1.5k
+───────────────────────
+缓存命中率       89.0%
+───────────────────────
+上下文占用   ~45.2k / 200k
+▬▬▬▬▬░░░░░░░░░░░░░░░░░
+22.6%
+  系统提示        ~6.1k
+  工具定义        ~9.4k
+  对话           ~29.7k
+───────────────────────
+刷新于 14:32:07        [刷新]
+`
+
+`Esc` 或点面板外关闭；刷新按钮重读快照并推进时间戳。
+
+### 二、侧栏底部（`sidebar.footer.action`）
+
+常驻卡片，不依赖当前会话。**蓝色主题**：品牌色顶边 + 渐变底 + 品牌色总量数字，中间是**自绘 SVG 近 14 天用量柱状图**（每天一根，空白日留一条扁平桩，保持节奏可见）：
+
+`
+┌──────────────────────────────┐
+│ ▮▮▮ Token 用量           1.4B │
+│ ▁▂▅▇▃▂▁▄▆█▅▃▂▁▂▄▆▅▃▂▁        │
+│ 今日                       1.2M │
+│ 累计                       1.4B │
+└──────────────────────────────┘
+`
+
+**柱子可以点。** 每根柱子是一个可聚焦的按钮（`role=button` + `tabIndex=0` + Enter/Space）：点一下卡片里就多出一行当天的日期与用量，**被选中的柱子会变高变宽**（不是加描边框 —— 浏览器给聚焦 SVG 元素画的默认 focus ring 取的是系统强调色，在有些机器上是橙色的，会跟界面不搭，所以已显式关掉，只用尺寸表达选中）；再点同一根取消选中。悬停有 `title`，键盘 Tab 聚焦时用主题色描一圈。
+
+图表只画**已经过去的日子**：热图网格的最后一列是本周的周六，直接取末 14 格会把还没到的日子画成空桩，所以先滤掉未来。
+
+`
+│ ▮▮▮ Token 用量           1.4B │
+│ ▁▂▅▇▃▂▁▄▆█▅▃▂▁▂▄▆▅▃▂█        │  ← 最后一根被选中,更高更宽
+│ 2026年10月3日             1.2M │  ← 选中后出现,品牌色
+│ 今日                       1.2M │
+│ 累计                       1.4B │
+`
+
+侧栏收起成窄栏时退化为一行总量。会话列表为空时不渲染（不占位显示 0）。
+
+### 三、设置页（`settings.section`，导航项「Token 用量」）
+
+> 导航项左侧的图标：宿主对不认识的 section id 一律画一个通用齿轮。插件让 `label` 返回一个带自绘三柱图标的元素，再用 `button:has(.tu-nav)>svg{display:none}` 只在自己的导航格里藏掉宿主齿轮——**不依赖宿主任何类名**；`:has()` 不支持时退化成「齿轮 + 自绘图标」并排，不会坏。自绘图标**继承导航项自身的颜色**（不额外着色），所以和其他导航项一致。
+
+**时间范围** —— 起始 / 结束两个日期输入 + 快捷「全部 / 近 7 天 / 近 30 天」。范围驱动下面的汇总行与会话表；热图保持完整 26 周形状，范围外的格子淡化。
+
+**汇总卡片**（三栏，窄屏自动堆叠；每张带预估费用）
+
+`
+┌─────────────┐ ┌─────────────┐ ┌─────────────┐
+│ 本会话       │ │ 今日         │ │ 累计         │
+│ 48.6k       │ │ 12.3M       │ │ 1.4B        │
+│ 输入 3.1k ·  │ │ 输入 1.2M ·  │ │ 输入 133M ·  │
+│ 缓存 41.9k · │ │ 缓存 11M ·   │ │ 缓存 1.2B ·  │
+│ 输出 1.5k    │ │ 输出 316K    │ │ 输出 52M     │
+│ ¥0.0094     │ │ ¥2.1530     │ │ ¥241.8800   │
+└─────────────┘ └─────────────┘ └─────────────┘
+`
+
+**Token 用量统计** —— 累计总量一行 + **26 周每日用量方格热图**。
+
+- **每个格子是可点的按钮**：点某天就在下面展开「当日明细」——该日日期、总量，以及当天的会话列表。悬停显示日期 + 用量。
+- 底部有月份轴（最后一个月的标签不再被裁掉）与「少 ▢▢▢▢ 多」图例。
+- 月份轴下面是**时间滑动条**：向右拖可以把 26 周窗口整体推向更早，滑动条下方实时显示该窗口的起止日期。热图始终铺满设置页宽度，靠这个控件而不是滚动条来移动时间。
+
+**按会话** —— 会话 / 模型 / 输入 tok / 缓存 tok / 输出 tok / 合计 tok，按时间倒序，最多 20 行。
+
+> **从未消耗过 token 的会话会被整条丢弃**（四桶合计为 0，或压根没有 `tokenUsage` 投影）。它们对任何合计都没有贡献，只会多出一行全零、并把「N 个会话」这个计数撑大。过滤发生在数据源头，所以表格、卡片、热图、侧栏卡片一致生效；一个全是空会话的列表会直接不渲染。
+
+**价格说明** —— 页面底部标注价格来源与峰谷口径。
+
+### 口径（与宿主一致，不自创）
+
+- 四个桶**互斥**；`outputTokens` 已包含推理 token，不重复计。
+- 命中率 = `缓存读 / (未命中输入 + 缓存读 + 缓存写)`。缓存写入属于输入分母，但不算命中。
+- 上下文占用是**锚定值**（provider 报的 prompt 大小），组成三项是**启发式估算**；两者刻意不相等，所以估算值都带 `~`。
+- 进度条/数字的预警档：≥75% 橙、≥90% 红。
+
+## 数据从哪来
+
+| 数据 | 来源 |
+|---|---|
+| 本会话四个 token 桶 | 会话投影 `tokenUsage` |
+| 上下文占用 | 会话投影 `contextPressure` |
+| 上下文组成 | 会话投影 `contextBreakdown` |
+| 跨会话汇总 / 热图 / 会话表 | 客户端会话列表 `ctx.sessions.list` 里每个会话的 `projectionValues.tokenUsage` |
+| 会话用了哪个模型 | 同一份 `projectionValues` 里的 `modelSelection.lastUsed.model` |
+| 会话日期 | `projectionValues.sessionListMetadata.lastPromptAt` |
+
+全部是宿主**已经算好并下发**的数据。本插件不写 Host 半边、不读磁盘日志、不发 RPC、不持久化。
+
+`lib/index.js` 是一个空 Cordis 插件，存在的唯一理由是：client module system 靠扫描**已启用**的 Loader entry 来组合浏览器包，包必须有一个可加载的 host 行，它的 `dsh.client` 声明才会变成浏览器 bundle。
+
+### 会话时间戳的处理
+
+热图需要日期。插件先读 `projectionValues.sessionListMetadata.lastPromptAt`，再依次回退 `lastPromptAt → createdAt → updatedAt → at → lastActivityAt → header.createdAt`；**一个都没有时，热图整块不渲染，卡片和会话表照常**。总量始终计入，不会因为缺时间戳而少算。
+
+## 安装
+
+**必须用 Desktop 自带的 CLI。** 全局 `dsh` 管不了 `desktop` profile（`--dump-config --profile desktop` 会失败；桌面版 `dsh/lib/bin.js:112` 对 boot/dump 路径无条件拒绝 desktop，只有 `plugin` 子命令在 `manageDesktopProfile` 下放行）。
+
+`powershell
+$env:ELECTRON_RUN_AS_NODE='1'; & "D:\DeepSeek harness\DeepSeek Harness.exe" --expose-internals "D:\DeepSeek harness\resources\app.asar\dsh\node_modules\@deepseek-ai\dsh-desktop-host\lib\cli.js" plugin --profile desktop add "D:\个人项目\dsh-token-usage"
+`
+
+装完 `dsh.profile.bundles` 自动追加，不需要手改 profile 任何文件。依赖是 `link:`，改源码即时生效。卸载把 `add` 换成 `remove dsh-token-usage`。
+
+## 开发
+
+`bash
+pnpm test         # 静态门禁 + 行为测试（26 条断言）
+pnpm check        # 只跑静态门禁
+pnpm sync-tokens  # 从本机 DSH 重新生成主题 token 白名单
+`
+
+四道静态门禁（`scripts/check.mjs`）：
+
+1. **中英 key 集合严格相等**，占位符集合也要相等（当前 48 key）。
+2. **样式里用到的每个 `--dsw-*` 都在白名单里，且每个 `var()` 都带字面量兜底**（当前 14 个 token）。
+3. **bundle 里 `t('key')` 引用的每个词条都必须在两张字典里存在**（当前 42 个引用）。
+   这道门禁是补出来的：我删费用功能时漏改了会话表里的一处 `costUnpriced`，界面直接把裸 key 显示出来了。门禁已用「故意注入该缺陷」验证过会失败。
+4. **每个文件 ≤ 262144 字节**（DSH STORE 单文件上限）。
+
+行为测试（`test/verify.mjs`）在伪 DOM + 伪 React + 伪 ctx 里跑真实 bundle。用 `TU_BUNDLE` 环境变量可以指向候选文件，这样在改 bundle 的过程中 `lib/client.js` 始终是完整可用的：
+
+`bash
+$env:TU_BUNDLE='lib/client.next.js'; node test/verify.mjs
+`
+
+## 跨版本健壮性
+
+这是首要设计约束。规则与依据：
+
+| 规则 | 为什么 |
+|---|---|
+| 用 `slots.inject`，**不用** `slots.register` | slot 未声明时 `register` 会抛，`inject` 只是永不执行 |
+| 投影/会话列表读不到就**降级**，不抛 | `useProjection` 对未知 key 返回 `undefined`；会话列表缺失时设置页退化成一行说明 |
+| 只有 locale 服务存在时才在 slot options 里写 `locale` | 声明了 `entry.locale` 但没有 locale face，会在**装配期**抛 `SlotAssemblyError`，而装配错会穿透平台的 entry 隔离 |
+| 每个挂载面都包在自带 ErrorBoundary 里 | 失败时渲染 `null`，而不是给宿主留一个错误占位 |
+| 每个 `var(--dsw-*)` 都带字面量兜底 | 变量被移除时 `var()` 不回落，整条声明会 IACVT |
+| 时间戳字段名靠探测，不硬依赖 | 它不是契约；探测不到只是不画热图 |
+| `dsh.compatibility` 只写下限 | 不锁死版本上限 |
+
+**排障**：装上后看不到时——
+
+1. 先确认是**静默降级**而不是崩溃：DevTools Console 里没有 `[dsh-token-usage]` 诊断、没有 `slot entry crashed`。
+2. 跑 `pnpm check` 确认包本身没坏。
+3. 完全退出应用（含托盘）再打开。
+
+## 许可证
+
+MIT

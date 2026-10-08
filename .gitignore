@@ -1,0 +1,16 @@
+# dependencies
+node_modules/
+
+# logs
+*.log
+npm-debug.log*
+
+# candidate bundle used while editing (see AGENTS.md: never write lib/client.js in place)
+lib/client.next.js
+lib/*.bak
+
+# editors / OS
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

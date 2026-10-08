@@ -1,0 +1,3 @@
+# Normalize to LF in the repository and in the working tree, so a fresh clone
+# has the same bytes the size gate in scripts/check.mjs measures.
+* text=auto eol=lf

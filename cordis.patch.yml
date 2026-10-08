@@ -1,0 +1,12 @@
+# dsh-token-usage bundle patch: one host row over the profile.
+#
+# The row exists only so the client-modules scanner sees an enabled Loader
+# entry and turns this package's `dsh.client` declaration into a browser
+# bundle. The host half (lib/index.js) is an empty Cordis plugin on purpose:
+# zero host-side logic means zero host-side version risk.
+#
+# Installed with the Desktop CLI (see README):
+#   plugin --profile desktop add <absolute path to this package>
+- insert:
+    - id: token-usage
+      name: dsh-token-usage
