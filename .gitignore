@@ -9,6 +9,9 @@ npm-debug.log*
 lib/client.next.js
 lib/*.bak
 
+# internal requirement notes - kept locally, deliberately not published
+docs/requirements.md
+
 # editors / OS
 .DS_Store
 Thumbs.db

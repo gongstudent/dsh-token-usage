@@ -103,12 +103,16 @@ host row before its `dsh.client` declaration becomes a bundle.
 $env:ELECTRON_RUN_AS_NODE = '1'
 $exe = "D:\DeepSeek harness\DeepSeek Harness.exe"
 $cli = "D:\DeepSeek harness\resources\app.asar\dsh\node_modules\@deepseek-ai\dsh-desktop-host\lib\cli.js"
-& $exe --expose-internals $cli plugin --profile desktop add <absolute path to this package>
+& $exe --expose-internals $cli plugin --profile desktop add github:gongstudent/dsh-token-usage
 `
 
 The install **automatically** appends this package to
-`dsh.profile.bundles`; no profile file needs editing. The dependency is
-a `link:`, so source edits take effect immediately.
+`dsh.profile.bundles`; no profile file needs editing.
+
+To install from a local checkout instead, pass its absolute path: the
+dependency then becomes a `link:` and source edits take effect
+immediately. To upgrade a `github:` install, run `add` again - it is
+pinned to a commit and will not follow the branch silently.
 
 **The host then has to recompose its Loader tree.** A newly added bundle is not
 guaranteed to be picked up by HMR; if it does not appear, restart the Desktop

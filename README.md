@@ -127,26 +127,36 @@ DeepSeek Harness 的 **token 用量查看器**。三个挂载面：输入框读�
 **必须用 Desktop 自带的 CLI。** 全局 `dsh` 管不了 `desktop` profile（`--dump-config --profile desktop` 会失败；桌面版 `dsh/lib/bin.js:112` 对 boot/dump 路径无条件拒绝 desktop，只有 `plugin` 子命令在 `manageDesktopProfile` 下放行）。
 
 `powershell
-$env:ELECTRON_RUN_AS_NODE='1'; & "D:\DeepSeek harness\DeepSeek Harness.exe" --expose-internals "D:\DeepSeek harness\resources\app.asar\dsh\node_modules\@deepseek-ai\dsh-desktop-host\lib\cli.js" plugin --profile desktop add "D:\个人项目\dsh-token-usage"
+$env:ELECTRON_RUN_AS_NODE='1'
+$exe = "D:\DeepSeek harness\DeepSeek Harness.exe"
+$cli = "D:\DeepSeek harness\resources\app.asar\dsh\node_modules\@deepseek-ai\dsh-desktop-host\lib\cli.js"
+& $exe --expose-internals $cli plugin --profile desktop add github:gongstudent/dsh-token-usage
 `
 
-装完 `dsh.profile.bundles` 自动追加，不需要手改 profile 任何文件。依赖是 `link:`，改源码即时生效。卸载把 `add` 换成 `remove dsh-token-usage`。
+装完 `dsh.profile.bundles` 自动追加，不需要手改 profile 任何文件。卸载把 `add` 换成 `remove dsh-token-usage`。
+
+**从源码开发**时把地址换成绝对路径（`add "D:\path\to\dsh-token-usage"`），依赖会变成 `link:`，改源码即时生效。
+
+**升级**：重跑一遍上面的 `add` 即可拉取最新提交（`github:` 依赖按 commit 锁定，不会静默跟随）。
 
 ## 开发
 
 `bash
-pnpm test         # 静态门禁 + 行为测试（26 条断言）
+pnpm test         # 静态门禁 + 行为测试（33 条断言）
 pnpm check        # 只跑静态门禁
 pnpm sync-tokens  # 从本机 DSH 重新生成主题 token 白名单
 `
 
-四道静态门禁（`scripts/check.mjs`）：
+七道静态门禁（`scripts/check.mjs`）：
 
 1. **中英 key 集合严格相等**，占位符集合也要相等（当前 48 key）。
 2. **样式里用到的每个 `--dsw-*` 都在白名单里，且每个 `var()` 都带字面量兜底**（当前 14 个 token）。
 3. **bundle 里 `t('key')` 引用的每个词条都必须在两张字典里存在**（当前 42 个引用）。
    这道门禁是补出来的：我删费用功能时漏改了会话表里的一处 `costUnpriced`，界面直接把裸 key 显示出来了。门禁已用「故意注入该缺陷」验证过会失败。
-4. **每个文件 ≤ 262144 字节**（DSH STORE 单文件上限）。
+4. **`color-mix()` 只能用于装饰**：色阶与柱子用 `opacity` / `fill-opacity` 表达强度，不依赖宿主可能不支持的颜色函数。
+5. **启动顺序**：bundle 必须声明 `slots` 依赖，跨会话挂载面必须走 `ctx.inject(['sessions'])` —— 见「跨版本健壮性」与 `AUDIT.md` §7。
+6. **包契约**：不得声明会锁版本的 `@deepseek-ai/dsh*` peerDependencies，且必须声明 bundle patch 与 client platform。
+7. **每个文件 ≤ 262144 字节**（DSH STORE 单文件上限）。
 
 行为测试（`test/verify.mjs`）在伪 DOM + 伪 React + 伪 ctx 里跑真实 bundle。用 `TU_BUNDLE` 环境变量可以指向候选文件，这样在改 bundle 的过程中 `lib/client.js` 始终是完整可用的：
 
@@ -160,6 +170,8 @@ $env:TU_BUNDLE='lib/client.next.js'; node test/verify.mjs
 
 | 规则 | 为什么 |
 |---|---|
+| **服务依赖用 `inject` 声明，不靠 `ctx.get` 探测** | 客户端 Loader 对无依赖的插件**立刻** apply，而渲染器提供的服务那时还没就绪 —— 曾经因此「HMR 正常、每次重启后全空且无声」，见 `AUDIT.md` §7 |
+| **依赖按挂载面拆分**（`ctx.inject([...], cb)`） | 把可选服务塞进 `exports.inject` 会让所有面在该服务改名时一起消失 |
 | 用 `slots.inject`，**不用** `slots.register` | slot 未声明时 `register` 会抛，`inject` 只是永不执行 |
 | 投影/会话列表读不到就**降级**，不抛 | `useProjection` 对未知 key 返回 `undefined`；会话列表缺失时设置页退化成一行说明 |
 | 只有 locale 服务存在时才在 slot options 里写 `locale` | 声明了 `entry.locale` 但没有 locale face，会在**装配期**抛 `SlotAssemblyError`，而装配错会穿透平台的 entry 隔离 |
