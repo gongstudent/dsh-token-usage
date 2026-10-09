@@ -132,6 +132,16 @@ assert.ok(/\.tu-cell\.muted\{[^}]*filter:opacity\(/.test(css),
   'dimming must use filter, so it multiplies with the level opacity instead of overriding it')
 console.log('[ok] audit invariants: color-mix stays decorative, intensity is opacity-based')
 
+// Read/activity stamps move when a session is merely opened. Consulting them for
+// day attribution re-dates every token a session ever spent onto the day it was
+// last looked at, which is exactly the bug this replaced.
+const bundleText = readFileSync(BUNDLE, 'utf8')
+assert.ok(!/summary\.updatedAt|summary\.lastActivityAt/.test(bundleText),
+  'day attribution must never consult read or activity timestamps')
+assert.ok(/function sessionPromptAt/.test(bundleText) && /function sessionStartedAt/.test(bundleText),
+  'prompt time and creation time must stay separate concepts')
+console.log('[ok] day attribution: only prompt and creation stamps, never read stamps')
+
 // The client Loader applies a plugin the moment it has no unmet dependency. With
 // an empty inject list this bundle applied BEFORE the renderer provided `slots`,
 // the guard in apply() found no service and returned, and nothing was ever

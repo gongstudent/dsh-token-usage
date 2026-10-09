@@ -76,11 +76,32 @@ Everything the harness already publishes is read; nothing is computed twice.
 | Context composition | session projection `contextBreakdown` |
 | Cross-session totals, heatmap, table | each session's `projectionValues.tokenUsage` in the client session list (`ctx.sessions.list`) |
 
-The heatmap needs dates, and the timestamp field on a session summary is not a
-contract, so several spellings are probed (`createdAt`, `updatedAt`, `at`,
-`lastActivityAt`, `header.createdAt`). **When none is present the heatmap is
-omitted entirely while the cards and the table still render**; undated sessions
-still count toward every total.
+### Attribution to a calendar day
+
+The heatmap answers "which day did these tokens go to", but the session list
+publishes only a cumulative total and one timestamp. So the rule is explicit:
+
+1. **Only the prompt stamp counts** - `sessionListMetadata.lastPromptAt`.
+   **`updatedAt` / `lastActivityAt` / `at` are never consulted**: they are
+   read/activity stamps that move when a session is merely *opened*. An earlier
+   version used them as fallbacks, so opening an old conversation the next day
+   re-dated its entire history onto today.
+2. **A session is attributed to a day only when its whole life fits that day**
+   (`header.createdAt` and `lastPromptAt` on the same date). That case is exact.
+3. **A multi-day session cannot be attributed.** Its per-day split is not
+   published anywhere a client can read (the `tokenUsage` projection's wire view is
+   only `totals`). Rather than dump the whole total onto whichever day happens to
+   be its last, the plugin reports it separately: it is excluded from the
+   calendar and from Today, and the section shows "a further N tokens come from
+   M multi-day sessions". Those table rows are marked **multi-day**.
+4. A session with no timestamp at all stays out of the calendar but still
+   counts toward every total.
+
+> **Why no per-turn split:** the client `sessions` service exposes only the list
+> snapshot, not the session event log (per-turn `usage` plus `event.time` live
+> there, on the host side). The reference implementation `dsh-cost-meter` gets this
+> right with a **persisted host-side ledger** (`turn-cost.js` / `backfill.js`); this
+> plugin deliberately persists nothing and issues no RPC.
 
 There is **no host half**. `lib/index.js` is an empty Cordis plugin.
 Its only reason to exist: the client module system composes its browser boot

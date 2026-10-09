@@ -118,9 +118,22 @@ DeepSeek Harness 的 **token 用量查看器**。三个挂载面：输入框读�
 
 `lib/index.js` 是一个空 Cordis 插件，存在的唯一理由是：client module system 靠扫描**已启用**的 Loader entry 来组合浏览器包，包必须有一个可加载的 host 行，它的 `dsh.client` 声明才会变成浏览器 bundle。
 
-### 会话时间戳的处理
+### 按天归属（重要）
 
-热图需要日期。插件先读 `projectionValues.sessionListMetadata.lastPromptAt`，再依次回退 `lastPromptAt → createdAt → updatedAt → at → lastActivityAt → header.createdAt`；**一个都没有时，热图整块不渲染，卡片和会话表照常**。总量始终计入，不会因为缺时间戳而少算。
+热图要回答「用量花在哪一天」，而会话列表只给两样东西：**该会话的累计用量**和一个时间戳。所以归属规则必须诚实：
+
+1. **只认「提问时间」** —— `projectionValues.sessionListMetadata.lastPromptAt`。
+   **绝不使用 `updatedAt` / `lastActivityAt` / `at`**：它们是「最近被读过/动过」的时间戳，
+   **仅仅打开一个会话就会变**。早期版本把它们当作回退候选，于是「第二天打开旧会话」会把它**全部历史**记到今天 —— 这是错的。
+2. **只有整个会话落在同一天时，才把它的累计用量记到那一天**（`header.createdAt` 与 `lastPromptAt` 同一天）。这种情况是**精确**的。
+3. **跨天会话无法归属**。会话跨了几天，但它每天的分布**没有下发**（`tokenUsage` 投影的 wire view 只有 `totals`）。
+   与其把总量丢到「最后一天」，插件把它**单独列出**：不计入日历和「今日」，并在热图下方显示
+   「另有 N tokens 来自 M 个跨天会话」，会话表里这些行标为**跨天**。
+4. 一个时间戳都没有的会话：不进日历，但**总量始终计入**，不会少算。
+
+> **为什么不做按轮次的精确拆分**：客户端 `sessions` 服务只暴露列表快照，读不到会话事件日志
+> （按轮次的 `usage` + `event.time` 在日志里，属于 host 侧数据）。参考实现 `dsh-cost-meter`
+> 是靠 **host 侧持久账本**（`turn-cost.js` / `backfill.js`）做到的，而本插件刻意不持久化、不发 RPC。
 
 ## 安装
 
@@ -142,12 +155,12 @@ $cli = "D:\DeepSeek harness\resources\app.asar\dsh\node_modules\@deepseek-ai\dsh
 ## 开发
 
 `bash
-pnpm test         # 静态门禁 + 行为测试（33 条断言）
+pnpm test         # 静态门禁 + 行为测试（36 条断言）
 pnpm check        # 只跑静态门禁
 pnpm sync-tokens  # 从本机 DSH 重新生成主题 token 白名单
 `
 
-七道静态门禁（`scripts/check.mjs`）：
+八道静态门禁（`scripts/check.mjs`）：
 
 1. **中英 key 集合严格相等**，占位符集合也要相等（当前 48 key）。
 2. **样式里用到的每个 `--dsw-*` 都在白名单里，且每个 `var()` 都带字面量兜底**（当前 14 个 token）。
@@ -156,7 +169,8 @@ pnpm sync-tokens  # 从本机 DSH 重新生成主题 token 白名单
 4. **`color-mix()` 只能用于装饰**：色阶与柱子用 `opacity` / `fill-opacity` 表达强度，不依赖宿主可能不支持的颜色函数。
 5. **启动顺序**：bundle 必须声明 `slots` 依赖，跨会话挂载面必须走 `ctx.inject(['sessions'])` —— 见「跨版本健壮性」与 `AUDIT.md` §7。
 6. **包契约**：不得声明会锁版本的 `@deepseek-ai/dsh*` peerDependencies，且必须声明 bundle patch 与 client platform。
-7. **每个文件 ≤ 262144 字节**（DSH STORE 单文件上限）。
+7. **按天归属只认提问/创建时间戳**，读取类时间戳（`updatedAt` / `lastActivityAt`）不得参与 —— 见上。
+8. **每个文件 ≤ 262144 字节**（DSH STORE 单文件上限）。
 
 行为测试（`test/verify.mjs`）在伪 DOM + 伪 React + 伪 ctx 里跑真实 bundle。用 `TU_BUNDLE` 环境变量可以指向候选文件，这样在改 bundle 的过程中 `lib/client.js` 始终是完整可用的：
 

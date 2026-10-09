@@ -155,7 +155,17 @@ function fakeSessions(rows) {
     if (row.usage !== undefined) values.tokenUsage = row.usage
     if (row.model !== undefined) values.modelSelection = { lastUsed: { provider: 'deepseek', model: row.model } }
     if (row.at !== undefined) values.sessionListMetadata = { blank: false, lastPromptAt: row.at }
-    byId[row.id] = { id: row.id, title: row.title, createdAt: row.createdAt, projectionValues: values }
+    byId[row.id] = {
+      id: row.id,
+      title: row.title,
+      createdAt: row.createdAt,
+      // Read and activity stamps really are present on the list rows; the day
+      // attribution deliberately ignores them.
+      updatedAt: row.updatedAt,
+      lastActivityAt: row.lastActivityAt,
+      header: row.headerCreatedAt === undefined ? undefined : { createdAt: row.headerCreatedAt },
+      projectionValues: values,
+    }
   }
   return { list: { subscribe: () => () => {}, getSnapshot: () => ({ byId }) } }
 }
@@ -436,6 +446,60 @@ const dockProps = {
   const future = cells.filter((cell) => cell.props && cell.props.disabled === true)
   assert.ok(future.length > 0, 'days after today are disabled rather than clickable')
   console.log('[ok] settings: heatmap cells are clickable and carry a day summary')
+}
+
+// ------------------------------------------- attribution to a calendar day
+{
+  const DAY = 86400000
+  const now = Date.now()
+  const start = new Date(now)
+  const todayStart = new Date(start.getFullYear(), start.getMonth(), start.getDate()).getTime()
+  const threeDaysAgo = todayStart - 3 * DAY + 9 * 3600000
+  const Side = happyRegistered.find((entry) => entry.options.name === 'sidebar.footer.action').component
+  const Section = happyRegistered.find((entry) => entry.options.name === 'settings.section').component
+  const barsOf = (tree) => tree.props.children[1].props.children
+  const todayBar = (bars) => bars[bars.length - 1]
+
+  // Merely OPENING a session moves updatedAt / lastActivityAt. Those are read
+  // stamps, not prompt stamps, so the tokens must stay on the day they were
+  // spent instead of jumping to whichever day the session was last looked at.
+  {
+    const sessions = fakeSessions([{
+      id: 'opened', title: 'Opened today', at: threeDaysAgo, createdAt: threeDaysAgo,
+      updatedAt: now, lastActivityAt: now, usage: usage(1000, 2000, 500),
+    }])
+    const bars = barsOf(render(Side, { sessions, wide: true }))
+    assert.equal(Number(todayBar(bars).props.height), 2, 'today stays empty when a session was only opened')
+    assert.ok(bars.some((bar) => Number(bar.props.height) > 2), 'the tokens stay on the day they were spent')
+    console.log('[ok] attribution: opening a session does not re-date its tokens')
+  }
+
+  // A session that spans days has no published split, so its tokens are carried
+  // separately rather than dumped onto whichever day happens to be its last.
+  {
+    const sessions = fakeSessions([{
+      id: 'spanning', title: 'Spanning session', at: now, createdAt: now - 5 * DAY,
+      usage: usage(1000000, 4000000, 2000000),
+    }])
+    const bars = barsOf(render(Side, { sessions, wide: true }))
+    assert.ok(bars.every((bar) => Number(bar.props.height) === 2), 'a multi-day session fills no day cell')
+    const text = JSON.stringify(render(Section, { sessions }))
+    assert.ok(text.includes('multi-day'), 'the table marks the row as spanning days')
+    assert.ok(text.includes('A further'), 'the section surfaces the unattributable total')
+    assert.ok(text.includes('Day'), 'the table has a day column')
+    console.log('[ok] attribution: a multi-day session is carried, never dumped onto one day')
+  }
+
+  // The unambiguous case still lands exactly: created and prompted the same day.
+  {
+    const sessions = fakeSessions([{
+      id: 'oneday', title: 'One day', at: now, createdAt: todayStart + 3600000,
+      usage: usage(1000, 2000, 500),
+    }])
+    const bars = barsOf(render(Side, { sessions, wide: true }))
+    assert.ok(Number(todayBar(bars).props.height) > 2, 'a session contained in one day fills today')
+    console.log('[ok] attribution: a session contained in one day lands on that day')
+  }
 }
 
 // ------------------------------------------------ sessions without usage
