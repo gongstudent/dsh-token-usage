@@ -146,7 +146,7 @@ assert.ok(!/summary\.updatedAt|summary\.lastActivityAt/.test(bundleText),
 assert.ok(/function sessionPromptAt/.test(bundleText), 'the prompt stamp stays the only timestamp concept')
 assert.ok(/const SPEND = loadSpend\(\)/.test(bundleText), 'observed spending is restored from the previous run')
 assert.ok(/function saveSpend\(\)/.test(bundleText), 'observed spending is written back')
-assert.ok(/dsh-token-usage\.spend\.v2/.test(bundleText), 'the ledger uses a versioned storage key')
+assert.ok(/dsh-token-usage\.spend\.v3/.test(bundleText), 'the ledger uses a versioned storage key')
 assert.ok(/SPEND_HORIZON_DAYS/.test(bundleText), 'the ledger is bounded by a horizon')
 assert.ok(/byDay: byDay/.test(bundleText) && /backlog: SPEND\.get\(id\)\.backlog/.test(bundleText),
   'each row carries its observed per-day amounts and its backlog')
@@ -155,8 +155,10 @@ assert.ok(/addInto\(bucket\.usage, row\.byDay\[key\]\)/.test(bundleText),
 assert.ok(!/addInto\(today, row\.usage\)/.test(bundleText),
   'a session total must never be credited to a single day')
 console.log('[ok] day attribution: observed growth only, never a cumulative total on one day')
-assert.ok(/backlog: cloneUsage\(usage\)/.test(bundleText),
-  'usage that predates the first observation is recorded as a backlog, not guessed onto a day')
+assert.ok(/else seen\.backlog = cloneUsage\(usage\)/.test(bundleText),
+  'only usage that cannot be placed off-today is recorded as a backlog')
+assert.ok(/day !== dayKeyOf\(Date\.now\(\)\)/.test(bundleText),
+  'a pre-existing total is never placed on today')
 assert.ok(/if \(totalTokens\(usage\) <= 0\) continue/.test(bundleText) &&
   bundleText.indexOf('recordSpend(id, at, usage)') < bundleText.indexOf('if (totalTokens(usage) <= 0) continue'),
   'a zero-usage session must still be baselined, or its first token looks like a backlog')

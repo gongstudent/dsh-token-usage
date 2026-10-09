@@ -497,6 +497,16 @@ const dockProps = {
     console.log('[ok] attribution: a pre-existing backlog is never guessed onto a day')
   }
 
+  // History survives: a session last prompted on an earlier day keeps its
+  // pre-existing usage on that day, so the calendar still shows the past.
+  {
+    const past = Date.now() - 3 * 86400000
+    const sessions = fakeSessions([{ id: 'history-session', title: 'History', at: past, usage: usage(1000000, 0, 0) }])
+    const bars = barsOf(render(Side, { sessions, wide: true }))
+    assert.ok(!allEmpty(bars), 'an earlier day keeps its share of the history')
+    assert.equal(Number(todayBar(bars).props.height), 2, 'and today stays empty')
+    console.log('[ok] attribution: history is kept on the day the session was last prompted')
+  }
   // Growth seen while running is credited to the day it was seen, and only that.
   {
     const id = 'growing-session'
@@ -533,9 +543,9 @@ const dockProps = {
     sessions: fakeSessions([{ id: 'ledger-session', title: 'Ledger', at: now, usage: usage(1000000, 0, 0) }]),
     wide: true,
   })
-  assert.ok(store.data.has('dsh-token-usage.spend.v2'), 'the ledger is written to storage')
-  const written = JSON.parse(store.data.get('dsh-token-usage.spend.v2'))
-  assert.equal(written.v, 2, 'the ledger carries its format version')
+  assert.ok(store.data.has('dsh-token-usage.spend.v3'), 'the ledger is written to storage')
+  const written = JSON.parse(store.data.get('dsh-token-usage.spend.v3'))
+  assert.equal(written.v, 3, 'the ledger carries its format version')
   assert.ok(written.s['ledger-session'], 'the observed session is in the ledger')
   assert.ok(Array.isArray(written.s['ledger-session'].b), 'its backlog is stored')
   assert.ok(written.s['ledger-session'].b[0] === 1000000, 'and holds the pre-existing amount')
@@ -543,8 +553,8 @@ const dockProps = {
   // A second load, seeded as if a previous run had already baselined the session
   // at 1M: the growth this run sees is today's alone, and the backlog stays put.
   const seeded = makeStorage({
-    'dsh-token-usage.spend.v2': JSON.stringify({
-      v: 2,
+    'dsh-token-usage.spend.v3': JSON.stringify({
+      v: 3,
       s: { 'restored-session': { u: [1000000, 0, 0, 0], d: {}, b: [1000000, 0, 0, 0] } },
     }),
   })
@@ -568,7 +578,7 @@ const dockProps = {
     render(Side, { sessions: fakeSessions([{ id: 'kept-session', title: 'Kept', at: now, usage: usage(500000, 0, 0) }]), wide: true })
     render(Side, { sessions: fakeSessions([]), wide: true })
     render(Side, {})
-    const ledger = JSON.parse(store.data.get('dsh-token-usage.spend.v2'))
+    const ledger = JSON.parse(store.data.get('dsh-token-usage.spend.v3'))
     assert.ok(ledger.s['kept-session'], 'a blank session list never forgets a session')
     assert.ok(ledger.s['session-alpha'], 'nor does a missing sessions service')
     console.log('[ok] persistence: a blank session list never wipes the ledger')
