@@ -148,8 +148,22 @@ assert.ok(/const SPEND = loadSpend\(\)/.test(bundleText), 'observed spending is 
 assert.ok(/function saveSpend\(\)/.test(bundleText), 'observed spending is written back')
 assert.ok(/dsh-token-usage\.spend\.v3/.test(bundleText), 'the ledger uses a versioned storage key')
 assert.ok(/SPEND_HORIZON_DAYS/.test(bundleText), 'the ledger is bounded by a horizon')
-assert.ok(/byDay: byDay/.test(bundleText) && /backlog: SPEND\.get\(id\)\.backlog/.test(bundleText),
-  'each row carries its observed per-day amounts and its backlog')
+assert.ok(/byDay: exact === null \? observed : exact/.test(bundleText),
+  'each row prefers the host per-day fold and falls back to the observed ledger')
+assert.ok(/function sessionByDay/.test(bundleText), 'the client reads the per-day projection')
+
+// The host half registers a session projection. Its dependency must stay
+// optional: a hard inject would leave the plugin unapplied on a harness that
+// moved the seam, taking the whole readout down with it.
+const hostText = readFileSync(join(root, 'lib', 'index.js'), 'utf8')
+assert.ok(/tokenUsageByDay/.test(hostText), 'the host registers a per-day projection key')
+assert.ok(/ctx\.inject\(\['sessionProjections'\]/.test(hostText),
+  'the projection dependency is taken optionally')
+assert.ok(!/export const inject = \['sessionProjections'\]/.test(hostText),
+  'a hard dependency on the seam would cost the whole plugin')
+assert.ok(/stateVersion: 1/.test(hostText) && /stateSchema/.test(hostText) && /viewSchema/.test(hostText),
+  'the projection declares a version and both schemas the registry calls parse() on')
+console.log('[ok] per-day projection: host registers it optionally, client prefers it')
 assert.ok(/addInto\(bucket\.usage, row\.byDay\[key\]\)/.test(bundleText),
   'the calendar must be built from observed per-day amounts, not from a session total')
 assert.ok(!/addInto\(today, row\.usage\)/.test(bundleText),

@@ -5,7 +5,8 @@
 ## 这是什么
 
 DeepSeek Harness 的 token 用量查看器。三个挂载面：输入框读数、侧栏卡片、设置页报表。
-只读、无持久化、**宿主半边是空插件**、不 import 任何 Harness Client 包。
+只读、不 import 任何 Harness Client 包。宿主半边**注册一个按天折叠的会话投影**（见下），
+客户端另外用 `localStorage` 记一份近似账本作为回退。
 
 ## 硬性约束（改动时不能破坏）
 
@@ -20,6 +21,9 @@ DeepSeek Harness 的 token 用量查看器。三个挂载面：输入框读数�
 | 中英 key 集合必须严格相等 | 门禁强制 |
 | 不 import `@deepseek-ai/*` | 只 `require('react')`（平台种子表） |
 | 不写宿主 DOM、不 portal 到 body、不用 iframe | 只在 `document.head` 注入带 `data-plugin` 的 `<style>` |
+| 宿主半边的 `sessionProjections` 依赖必须**可选**（`ctx.inject`） | 硬依赖会让整个插件在接口改名后不再 apply，连客户端半边一起消失 |
+| 投影必须声明 `stateVersion` / `stateSchema` / `wire.viewSchema` | 注册表会对三者调用 `.parse()`，缺一个就抛 |
+| 投影的 `apply` 对不关心的事件必须返回**同一个引用** | 变更流用 `Object.is` 判断，每次分配会让所有客户端白刷新 |
 
 ## 改代码的流程（重要）
 

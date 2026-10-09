@@ -168,6 +168,8 @@ function fakeSessions(rows) {
     if (row.usage !== undefined) values.tokenUsage = row.usage
     if (row.model !== undefined) values.modelSelection = { lastUsed: { provider: 'deepseek', model: row.model } }
     if (row.at !== undefined) values.sessionListMetadata = { blank: false, lastPromptAt: row.at }
+    // The host's exact per-day fold, when a test provides one.
+    if (row.byDay !== undefined) values.tokenUsageByDay = row.byDay
     byId[row.id] = {
       id: row.id,
       title: row.title,
@@ -495,6 +497,31 @@ const dockProps = {
     assert.ok(text.includes('A further'), 'the backlog is surfaced rather than hidden')
     assert.ok(text.includes('1M'), 'and its size is reported')
     console.log('[ok] attribution: a pre-existing backlog is never guessed onto a day')
+  }
+
+  // When the host publishes its per-day fold, it wins outright: the days are the
+  // real ones and nothing is inferred, so no backlog is left over.
+  {
+    const pad = (n) => (n < 10 ? '0' + n : String(n))
+    const keyOf = (ms) => { const d = new Date(ms); return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) }
+    const now2 = Date.now()
+    const past = now2 - 3 * 86400000
+    const sessions = fakeSessions([{
+      id: 'exact-session', title: 'Exact', at: now2,
+      usage: usage(1000000, 400000, 0, 0),
+      byDay: {
+        [keyOf(past)]: { uncachedInputTokens: 1000000, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+        [keyOf(now2)]: { uncachedInputTokens: 0, outputTokens: 0, cacheReadTokens: 400000, cacheWriteTokens: 0 },
+      },
+    }])
+    const bars = barsOf(render(Side, { sessions, wide: true }))
+    assert.ok(!allEmpty(bars), 'the host days reach the calendar')
+    assert.ok(Number(todayBar(bars).props.height) > 2, 'and today carries its exact share')
+    const tree2 = render(Section, { sessions })
+    const cards2 = tree2.props.children[2]
+    assert.ok(JSON.stringify(cards2.props.children[1]).includes('400k'), 'the Today card shows the exact share')
+    assert.ok(!JSON.stringify(tree2).includes('A further'), 'an exact split leaves no backlog')
+    console.log('[ok] attribution: the host per-day fold wins over the ledger, exactly')
   }
 
   // History survives: a session last prompted on an earlier day keeps its

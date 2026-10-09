@@ -17,7 +17,7 @@
   ],
   "scripts": {
     "check": "node scripts/check.mjs",
-    "test": "node scripts/check.mjs && node test/verify.mjs",
+    "test": "node scripts/check.mjs && node test/verify.mjs && node test/host.mjs",
     "sync-tokens": "node scripts/sync-tokens.mjs"
   },
   "keywords": [

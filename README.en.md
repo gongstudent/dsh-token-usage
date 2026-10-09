@@ -78,45 +78,67 @@ Everything the harness already publishes is read; nothing is computed twice.
 
 ### Attribution to a calendar day
 
-The heatmap answers "which day did these tokens go to", but the session list
-publishes **only two things**: a session's cumulative total and one timestamp. So
-the rule is explicit:
+The heatmap answers "which day did these tokens go to". The exact answer lives in
+the session event log, which the host half folds by day (see above). When that
+projection is absent - an old session the host never loaded - the plugin falls
+back to the rules below, and says so:
 
-1. **Only the prompt stamp counts** - `sessionListMetadata.lastPromptAt`, which the host
-   updates only on a real user message.
-   **`updatedAt` / `lastActivityAt` / `at` are never consulted** - they are read and
-   activity stamps.
-2. **A cumulative total is never dumped onto one day.** The list row does not
-   even carry the session's creation time (`summaryFor` in `dsh-api-session-controller` spreads
-   only `parentSessionId`/`origin`/`cwd` out of the header), so **how a session's spend is
-   spread across days cannot be known on the client**.
-3. Per-day amounts come from **observed growth only**: the plugin remembers the
-   last total it saw per session and credits the difference to the day it saw it.
-4. **Usage that already existed when a session was first seen is recorded as a
-   backlog**, not placed on any day. The plugin was not watching then, and
-   guessing a date writes a permanently wrong answer into the ledger. The backlog
-   is reported on its own line under the heatmap.
-5. The ledger is **persisted in `localStorage`** (key `dsh-token-usage.spend.v2`):
+1. **First choice: the `tokenUsageByDay` projection the host publishes.** It is the
+   event log folded by day, so it is **exact**. Present for every session the host
+   has loaded; absent for an old session that was never opened (a new key never
+   appears in the persisted projection cache).
+2. **When it is absent, an approximation**, by these rules:
+   - **Only the prompt stamp counts** (`sessionListMetadata.lastPromptAt`).
+     **`updatedAt` / `lastActivityAt` / `at` are never consulted** - they are read and
+     activity stamps.
+   - Per-day amounts come from **observed growth only**: the plugin remembers the
+     last total it saw per session and credits the difference to the day it saw it.
+   - **Usage that already existed at first sight** goes on the session's **last
+     prompt day** (so history survives) but **never on today** - how much of it is
+     today's cannot be told, and today is the figure that must not be inflated.
+     What cannot be placed is reported on its own line under the heatmap.
+3. The ledger is **persisted in `localStorage`** (key `dsh-token-usage.spend.v3`):
    browser-local, **no RPC, no host write, no file**. Only the last 200 days are
    kept. Sessions are deliberately **not** dropped for being absent from the
    list - it can be blank while loading, or scoped to one workspace, and
    forgetting a session there destroys its whole attribution (a hazard found by
    testing).
+   testing).
 
 **In practice:**
 
-- A **new session** is exact from its first token: Today really is today.
-- Continuing an **old session** puts only today's growth into Today; its history
-  stays in the backlog and **never contaminates today**.
+- A session the host has loaded: **every day is the real number** (measured on a
+  real session: 10-08 = 193.1M, 10-09 = 50.1M).
+- An old session that was never opened: the approximation above, with its
+  carried-over share listed explicitly.
 - **A restart loses nothing:** the ledger is read back and grows from there.
 
 > An earlier version placed the backlog on the session's last prompt day. That
 > wrote a guess into the ledger permanently: continuing yesterday's conversation
 > once put its entire history into Today forever. It no longer guesses.
-There is **no host half**. `lib/index.js` is an empty Cordis plugin.
-Its only reason to exist: the client module system composes its browser boot
-graph by scanning **enabled** Loader entries, so a package needs a loadable
-host row before its `dsh.client` declaration becomes a bundle.
+The host half (`lib/index.js`) **registers one session projection** that folds the
+session event log into per-day buckets:
+
+`js
+ctx.inject(['sessionProjections'], (scoped) => scoped.sessionProjections.register({
+  key: 'tokenUsageByDay',
+  apply: (state, event) => { /* bucket event.data.usage by event.time */ },
+  wire: { view: (state) => state },   // { '2026-10-08': {...}, '2026-10-09': {...} }
+}))
+`
+
+**Why it is needed:** every settled assistant message carries its own usage *and*
+the wall-clock time it settled - when tokens were spent exists only in that log.
+The `tokenUsage` projection the harness already publishes folds it into one
+cumulative total, so a list row says how much a session ever spent and nothing
+about when.
+
+It is a **pure fold**: reads no file, writes no file, opens no port, makes no
+call. The client reads the result through the platform's own projection pipeline.
+
+> The dependency is **optional** (`ctx.inject`, not `export const inject`): a future
+> harness that moves or renames the seam costs only the per-day breakdown - the
+> plugin still loads and the client falls back to its own approximation.
 
 ## Install
 
