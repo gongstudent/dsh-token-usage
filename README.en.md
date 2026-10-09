@@ -79,41 +79,40 @@ Everything the harness already publishes is read; nothing is computed twice.
 ### Attribution to a calendar day
 
 The heatmap answers "which day did these tokens go to", but the session list
-publishes **only two things**: a session's cumulative total and one timestamp.
-So the rule is explicit:
+publishes **only two things**: a session's cumulative total and one timestamp. So
+the rule is explicit:
 
-1. **Only the prompt stamp counts** - `sessionListMetadata.lastPromptAt`, which the
-   host updates only on a real user message.
-   **`updatedAt` / `lastActivityAt` / `at` are never consulted** - they are read
-   and activity stamps.
+1. **Only the prompt stamp counts** - `sessionListMetadata.lastPromptAt`, which the host
+   updates only on a real user message.
+   **`updatedAt` / `lastActivityAt` / `at` are never consulted** - they are read and
+   activity stamps.
 2. **A cumulative total is never dumped onto one day.** The list row does not
-   even carry the session's creation time (`summaryFor` in
-   `dsh-api-session-controller` spreads only `parentSessionId`/`origin`/`cwd` out of the header),
-   so whether a session spans days **cannot be determined on the client** - an
-   earlier version tried to detect it that way and the code never once ran.
-3. Per-day amounts come from **observed growth**: the plugin remembers the last
-   total it saw per session and credits the difference to the day it saw it.
-   Whatever already existed at first sight goes to the session's **last prompt
-   day**, the earliest day it is known to have been active, because that part was
-   spent before this run could observe anything.
-4. The bookkeeping is **persisted in `localStorage`** (key
-   `dsh-token-usage.spend.v1`): browser-local, with **no RPC, no host write and no file**.
-   Only the last 200 days are kept, and only for sessions still in the list.
+   even carry the session's creation time (`summaryFor` in `dsh-api-session-controller` spreads
+   only `parentSessionId`/`origin`/`cwd` out of the header), so **how a session's spend is
+   spread across days cannot be known on the client**.
+3. Per-day amounts come from **observed growth only**: the plugin remembers the
+   last total it saw per session and credits the difference to the day it saw it.
+4. **Usage that already existed when a session was first seen is recorded as a
+   backlog**, not placed on any day. The plugin was not watching then, and
+   guessing a date writes a permanently wrong answer into the ledger. The backlog
+   is reported on its own line under the heatmap.
+5. The ledger is **persisted in `localStorage`** (key `dsh-token-usage.spend.v2`):
+   browser-local, **no RPC, no host write, no file**. Only the last 200 days are
+   kept. Sessions are deliberately **not** dropped for being absent from the
+   list - it can be blank while loading, or scoped to one workspace, and
+   forgetting a session there destroys its whole attribution (a hazard found by
+   testing).
 
-**In practice:** continue yesterday's conversation today and yesterday keeps its
-share - only today's growth lands in Today. **A restart does not lose it:** the
-next run reads the ledger back and credits only growth to the day it happened.
+**In practice:**
 
-> Only the **very first run** (no ledger on disk yet) places each session's
-> pre-existing lump on its last prompt day. Deleting that localStorage key
-> returns to that state.
+- A **new session** is exact from its first token: Today really is today.
+- Continuing an **old session** puts only today's growth into Today; its history
+  stays in the backlog and **never contaminates today**.
+- **A restart loses nothing:** the ledger is read back and grows from there.
 
-> An earlier version deliberately persisted nothing, and the result was a
-> **constantly wrong number on every start**. Simplicity bought inaccuracy, which
-> is the wrong trade, so it changed.
-
-A session with no timestamp at all stays out of the calendar but still counts
-toward every total.
+> An earlier version placed the backlog on the session's last prompt day. That
+> wrote a guess into the ledger permanently: continuing yesterday's conversation
+> once put its entire history into Today forever. It no longer guesses.
 There is **no host half**. `lib/index.js` is an empty Cordis plugin.
 Its only reason to exist: the client module system composes its browser boot
 graph by scanning **enabled** Loader entries, so a package needs a loadable

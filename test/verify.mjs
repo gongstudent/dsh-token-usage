@@ -301,6 +301,19 @@ exported.apply(happyCtx)
 const Dock = happyRegistered.find((entry) => entry.options.name === 'conversation.composer.dock').component
 const Section = happyRegistered.find((entry) => entry.options.name === 'settings.section').component
 
+/**
+ * Baseline sessions at zero, so the spend that follows counts as observed
+ * growth. Per-day attribution only has evidence for spend the plugin watched,
+ * so a test that wants a populated calendar has to let it watch.
+ */
+function warm(ids) {
+  const Side = happyRegistered.find((entry) => entry.options.name === 'sidebar.footer.action').component
+  const warmed = render(Side, {
+    sessions: fakeSessions(ids.map((id) => ({ id, title: id, usage: usage(0, 0, 0, 0) }))),
+    wide: true,
+  })
+}
+
 /** The registered entry's outer element - the error boundary itself. */
 function outerOf(Component, props) {
   react.__reset()
@@ -399,6 +412,7 @@ const dockProps = {
 // -------------------------------------------------------- settings page
 {
   const now = Date.now()
+  warm(['session-alpha', 'session-beta'])
   const sessions = fakeSessions([
     { id: 'session-alpha', title: 'Alpha session', at: now, model: 'deepseek-flash', usage: usage(2000, 4000, 800) },
     { id: 'session-beta', title: 'Beta session', at: now - 3 * DAY, model: 'cline-pass/deepseek-v4-pro', usage: usage(1000, 9000, 500, 100) },
@@ -463,100 +477,75 @@ const dockProps = {
 
 // ------------------------------------------- attribution to a calendar day
 {
-  const DAY = 86400000
   const now = Date.now()
-  const start = new Date(now)
-  const todayStart = new Date(start.getFullYear(), start.getMonth(), start.getDate()).getTime()
-  const threeDaysAgo = todayStart - 3 * DAY + 9 * 3600000
   const Side = happyRegistered.find((entry) => entry.options.name === 'sidebar.footer.action').component
+  const Section = happyRegistered.find((entry) => entry.options.name === 'settings.section').component
   const barsOf = (tree) => tree.props.children[1].props.children
   const todayBar = (bars) => bars[bars.length - 1]
-  const tallest = (bars) => Math.max.apply(null, bars.map((bar) => Number(bar.props.height)))
+  const allEmpty = (bars) => bars.every((bar) => Number(bar.props.height) === 2)
 
-  // Read and activity stamps move when a session is merely opened. They must
-  // never drive attribution, so a session prompted three days ago stays there
-  // even when updatedAt/lastActivityAt say now.
+  // A session that already had usage when it was first seen: when that usage
+  // happened is not published anywhere a client can read, so it must not be
+  // guessed onto a day. It is surfaced as a backlog instead.
   {
-    const sessions = fakeSessions([{
-      id: 'opened-session', title: 'Opened today', at: threeDaysAgo, createdAt: threeDaysAgo,
-      updatedAt: now, lastActivityAt: now, usage: usage(1000, 2000, 500),
-    }])
+    const sessions = fakeSessions([{ id: 'backlog-session', title: 'Backlog', at: now, usage: usage(1000000, 0, 0) }])
     const bars = barsOf(render(Side, { sessions, wide: true }))
-    assert.equal(Number(todayBar(bars).props.height), 2, 'today stays empty when a session was only opened')
-    assert.ok(bars.some((bar) => Number(bar.props.height) > 2), 'the tokens stay on the day they were spent')
-    console.log('[ok] attribution: opening a session does not re-date its tokens')
+    assert.ok(allEmpty(bars), 'a pre-existing backlog fills no day cell')
+    const text = JSON.stringify(render(Section, { sessions }))
+    assert.ok(text.includes('A further'), 'the backlog is surfaced rather than hidden')
+    assert.ok(text.includes('1M'), 'and its size is reported')
+    console.log('[ok] attribution: a pre-existing backlog is never guessed onto a day')
   }
 
-  // The whole point: continuing an old conversation must credit only the growth
-  // to today, never the session's cumulative total.
+  // Growth seen while running is credited to the day it was seen, and only that.
   {
-    const Section = happyRegistered.find((entry) => entry.options.name === 'settings.section').component
     const id = 'growing-session'
-    // 1M spent three days ago; the app starts and observes exactly that.
-    const before = fakeSessions([{ id, title: 'Growing', at: threeDaysAgo, usage: usage(1000000, 0, 0) }])
-    const barsBefore = barsOf(render(Side, { sessions: before, wide: true }))
-    assert.equal(Number(todayBar(barsBefore).props.height), 2, 'the pre-existing lump is not credited to today')
-
-    // The conversation is continued today: the total grows by 250k and the
-    // prompt stamp moves to now. Only the growth may land on today.
+    render(Side, { sessions: fakeSessions([{ id, title: 'Growing', at: now, usage: usage(1000000, 0, 0) }]), wide: true })
     const after = fakeSessions([{ id, title: 'Growing', at: now, usage: usage(1000000, 0, 250000) }])
-    const barsAfter = barsOf(render(Side, { sessions: after, wide: true }))
-    assert.ok(Number(todayBar(barsAfter).props.height) > 2, 'growth observed today fills today')
-    assert.ok(
-      Number(todayBar(barsAfter).props.height) < tallest(barsAfter),
-      'today holds only the growth, not the whole session total'
-    )
-    // Read the cards directly: the Today card must show the 250k growth, while
-    // the All-time card still shows the whole 1.25M session.
+    const bars = barsOf(render(Side, { sessions: after, wide: true }))
+    assert.ok(Number(todayBar(bars).props.height) > 2, 'growth observed today fills today')
     const cards = render(Section, { sessions: after }).props.children[2]
     assert.ok(JSON.stringify(cards.props.children[1]).includes('250k'), 'the Today card reports the growth alone')
-    assert.ok(JSON.stringify(cards.props.children[2]).includes('1.3M'), 'the All-time card still reports the whole session')
-    console.log('[ok] attribution: continuing a session credits the growth (250k), not the total (1.3M)')
+    assert.ok(JSON.stringify(cards.props.children[2]).includes('1.3M'), 'the All-time card still totals the session')
+    console.log('[ok] attribution: growth is credited to the day it was observed (250k), not the total (1.3M)')
   }
 
-  // A session first seen with usage and prompted today is exact: nothing
-  // pre-existed that this run failed to observe.
+  // A session that starts at zero has no backlog, so it is exact from its very
+  // first token - which is why a zero-usage session is still baselined.
   {
-    const sessions = fakeSessions([{
-      id: 'fresh-session', title: 'One day', at: now, createdAt: todayStart + 3600000,
-      usage: usage(1000, 2000, 500),
-    }])
-    const bars = barsOf(render(Side, { sessions, wide: true }))
-    assert.ok(Number(todayBar(bars).props.height) > 2, 'a session first seen today fills today')
-    console.log('[ok] attribution: a session first seen today lands on today')
+    const id = 'fresh-session'
+    render(Side, { sessions: fakeSessions([{ id, title: 'Fresh', at: now, usage: usage(0, 0, 0, 0) }]), wide: true })
+    const after = fakeSessions([{ id, title: 'Fresh', at: now, usage: usage(0, 0, 400000) }])
+    const bars = barsOf(render(Side, { sessions: after, wide: true }))
+    assert.ok(Number(todayBar(bars).props.height) > 2, 'a session that started empty fills today')
+    const cards = render(Section, { sessions: after }).props.children[2]
+    assert.ok(JSON.stringify(cards.props.children[1]).includes('400k'), 'its whole spend is today, with no backlog')
+    assert.ok(!JSON.stringify(cards).includes('A further'), 'and no backlog is reported')
+    console.log('[ok] attribution: a session that started at zero is exact from its first token')
   }
 }
 // ------------------------------------------------- ledger persistence
 {
-  const DAY = 86400000
   const now = Date.now()
-  const d = new Date(now)
-  const todayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
-  const past = todayStart - 3 * DAY + 9 * 3600000
-  const pd = new Date(past)
-  const pad = (n) => (n < 10 ? '0' + n : String(n))
-  const pastKey = pd.getFullYear() + '-' + pad(pd.getMonth() + 1) + '-' + pad(pd.getDate())
-
-  // This run must write the ledger it built, so the next one starts where it
-  // left off instead of re-placing every session's total on one day.
   const Side = happyRegistered.find((entry) => entry.options.name === 'sidebar.footer.action').component
+
   render(Side, {
-    sessions: fakeSessions([{ id: 'ledger-session', title: 'Ledger', at: past, usage: usage(1000000, 0, 0) }]),
+    sessions: fakeSessions([{ id: 'ledger-session', title: 'Ledger', at: now, usage: usage(1000000, 0, 0) }]),
     wide: true,
   })
-  assert.ok(store.data.has('dsh-token-usage.spend.v1'), 'the ledger is written to storage')
-  const written = JSON.parse(store.data.get('dsh-token-usage.spend.v1'))
-  assert.equal(written.v, 1, 'the ledger carries its format version')
+  assert.ok(store.data.has('dsh-token-usage.spend.v2'), 'the ledger is written to storage')
+  const written = JSON.parse(store.data.get('dsh-token-usage.spend.v2'))
+  assert.equal(written.v, 2, 'the ledger carries its format version')
   assert.ok(written.s['ledger-session'], 'the observed session is in the ledger')
-  assert.ok(written.s['ledger-session'].d[pastKey], 'and keeps the day it was first seen on')
-  assert.ok(!written.s['growing-session'], 'a session that left the list is forgotten')
+  assert.ok(Array.isArray(written.s['ledger-session'].b), 'its backlog is stored')
+  assert.ok(written.s['ledger-session'].b[0] === 1000000, 'and holds the pre-existing amount')
 
-  // A second load, seeded as if a previous run had already observed 1M three
-  // days ago: the growth this run sees is today's alone.
+  // A second load, seeded as if a previous run had already baselined the session
+  // at 1M: the growth this run sees is today's alone, and the backlog stays put.
   const seeded = makeStorage({
-    'dsh-token-usage.spend.v1': JSON.stringify({
-      v: 1,
-      s: { 'restored-session': { u: [1000000, 0, 0, 0], d: { [pastKey]: [1000000, 0, 0, 0] } } },
+    'dsh-token-usage.spend.v2': JSON.stringify({
+      v: 2,
+      s: { 'restored-session': { u: [1000000, 0, 0, 0], d: {}, b: [1000000, 0, 0, 0] } },
     }),
   })
   const second = loadBundle(seeded)
@@ -564,8 +553,6 @@ const dockProps = {
   second.exported.apply(ctx)
   const Restored = registered.find((entry) => entry.options.name === 'settings.section').component
   const sessions = fakeSessions([{ id: 'restored-session', title: 'Restored', at: now, usage: usage(1000000, 0, 250000) }])
-  // The registered entry wraps the view in its error boundary, so descend the
-  // same way render() does - but through the second bundle's own React.
   second.react.__reset()
   const inner = Restored({ sessions }).props.children
   second.react.__reset()
@@ -573,8 +560,20 @@ const dockProps = {
   assert.ok(JSON.stringify(cards.props.children[1]).includes('250k'), 'a restored ledger credits only the growth to today')
   assert.ok(JSON.stringify(cards.props.children[2]).includes('1.3M'), 'and still totals the whole session')
   console.log('[ok] persistence: a restored ledger credits only the growth to today')
+  // A blank or not-yet-loaded list says nothing about which sessions still
+  // exist. Treating it as authoritative once wiped the whole ledger and turned
+  // every session into a backlog on the next render.
+  {
+    const Side = happyRegistered.find((entry) => entry.options.name === 'sidebar.footer.action').component
+    render(Side, { sessions: fakeSessions([{ id: 'kept-session', title: 'Kept', at: now, usage: usage(500000, 0, 0) }]), wide: true })
+    render(Side, { sessions: fakeSessions([]), wide: true })
+    render(Side, {})
+    const ledger = JSON.parse(store.data.get('dsh-token-usage.spend.v2'))
+    assert.ok(ledger.s['kept-session'], 'a blank session list never forgets a session')
+    assert.ok(ledger.s['session-alpha'], 'nor does a missing sessions service')
+    console.log('[ok] persistence: a blank session list never wipes the ledger')
+  }
 }
-
 // ------------------------------------------------ sessions without usage
 {
   // A session that never spent a token is dropped from every consumer: it

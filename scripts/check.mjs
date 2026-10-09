@@ -146,14 +146,20 @@ assert.ok(!/summary\.updatedAt|summary\.lastActivityAt/.test(bundleText),
 assert.ok(/function sessionPromptAt/.test(bundleText), 'the prompt stamp stays the only timestamp concept')
 assert.ok(/const SPEND = loadSpend\(\)/.test(bundleText), 'observed spending is restored from the previous run')
 assert.ok(/function saveSpend\(\)/.test(bundleText), 'observed spending is written back')
-assert.ok(/dsh-token-usage\.spend\.v1/.test(bundleText), 'the ledger uses a versioned storage key')
+assert.ok(/dsh-token-usage\.spend\.v2/.test(bundleText), 'the ledger uses a versioned storage key')
 assert.ok(/SPEND_HORIZON_DAYS/.test(bundleText), 'the ledger is bounded by a horizon')
-assert.ok(/byDay: recordSpend\(/.test(bundleText), 'each row carries its observed per-day amounts')
+assert.ok(/byDay: byDay/.test(bundleText) && /backlog: SPEND\.get\(id\)\.backlog/.test(bundleText),
+  'each row carries its observed per-day amounts and its backlog')
 assert.ok(/addInto\(bucket\.usage, row\.byDay\[key\]\)/.test(bundleText),
   'the calendar must be built from observed per-day amounts, not from a session total')
 assert.ok(!/addInto\(today, row\.usage\)/.test(bundleText),
   'a session total must never be credited to a single day')
 console.log('[ok] day attribution: observed growth only, never a cumulative total on one day')
+assert.ok(/backlog: cloneUsage\(usage\)/.test(bundleText),
+  'usage that predates the first observation is recorded as a backlog, not guessed onto a day')
+assert.ok(/if \(totalTokens\(usage\) <= 0\) continue/.test(bundleText) &&
+  bundleText.indexOf('recordSpend(id, at, usage)') < bundleText.indexOf('if (totalTokens(usage) <= 0) continue'),
+  'a zero-usage session must still be baselined, or its first token looks like a backlog')
 
 // The client Loader applies a plugin the moment it has no unmet dependency. With
 // an empty inject list this bundle applied BEFORE the renderer provided `slots`,
