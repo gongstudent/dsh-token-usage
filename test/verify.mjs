@@ -456,16 +456,16 @@ const dockProps = {
   const todayStart = new Date(start.getFullYear(), start.getMonth(), start.getDate()).getTime()
   const threeDaysAgo = todayStart - 3 * DAY + 9 * 3600000
   const Side = happyRegistered.find((entry) => entry.options.name === 'sidebar.footer.action').component
-  const Section = happyRegistered.find((entry) => entry.options.name === 'settings.section').component
   const barsOf = (tree) => tree.props.children[1].props.children
   const todayBar = (bars) => bars[bars.length - 1]
+  const tallest = (bars) => Math.max.apply(null, bars.map((bar) => Number(bar.props.height)))
 
-  // Merely OPENING a session moves updatedAt / lastActivityAt. Those are read
-  // stamps, not prompt stamps, so the tokens must stay on the day they were
-  // spent instead of jumping to whichever day the session was last looked at.
+  // Read and activity stamps move when a session is merely opened. They must
+  // never drive attribution, so a session prompted three days ago stays there
+  // even when updatedAt/lastActivityAt say now.
   {
     const sessions = fakeSessions([{
-      id: 'opened', title: 'Opened today', at: threeDaysAgo, createdAt: threeDaysAgo,
+      id: 'opened-session', title: 'Opened today', at: threeDaysAgo, createdAt: threeDaysAgo,
       updatedAt: now, lastActivityAt: now, usage: usage(1000, 2000, 500),
     }])
     const bars = barsOf(render(Side, { sessions, wide: true }))
@@ -474,34 +474,45 @@ const dockProps = {
     console.log('[ok] attribution: opening a session does not re-date its tokens')
   }
 
-  // A session that spans days has no published split, so its tokens are carried
-  // separately rather than dumped onto whichever day happens to be its last.
+  // The whole point: continuing an old conversation must credit only the growth
+  // to today, never the session's cumulative total.
   {
-    const sessions = fakeSessions([{
-      id: 'spanning', title: 'Spanning session', at: now, createdAt: now - 5 * DAY,
-      usage: usage(1000000, 4000000, 2000000),
-    }])
-    const bars = barsOf(render(Side, { sessions, wide: true }))
-    assert.ok(bars.every((bar) => Number(bar.props.height) === 2), 'a multi-day session fills no day cell')
-    const text = JSON.stringify(render(Section, { sessions }))
-    assert.ok(text.includes('multi-day'), 'the table marks the row as spanning days')
-    assert.ok(text.includes('A further'), 'the section surfaces the unattributable total')
-    assert.ok(text.includes('Day'), 'the table has a day column')
-    console.log('[ok] attribution: a multi-day session is carried, never dumped onto one day')
+    const Section = happyRegistered.find((entry) => entry.options.name === 'settings.section').component
+    const id = 'growing-session'
+    // 1M spent three days ago; the app starts and observes exactly that.
+    const before = fakeSessions([{ id, title: 'Growing', at: threeDaysAgo, usage: usage(1000000, 0, 0) }])
+    const barsBefore = barsOf(render(Side, { sessions: before, wide: true }))
+    assert.equal(Number(todayBar(barsBefore).props.height), 2, 'the pre-existing lump is not credited to today')
+
+    // The conversation is continued today: the total grows by 250k and the
+    // prompt stamp moves to now. Only the growth may land on today.
+    const after = fakeSessions([{ id, title: 'Growing', at: now, usage: usage(1000000, 0, 250000) }])
+    const barsAfter = barsOf(render(Side, { sessions: after, wide: true }))
+    assert.ok(Number(todayBar(barsAfter).props.height) > 2, 'growth observed today fills today')
+    assert.ok(
+      Number(todayBar(barsAfter).props.height) < tallest(barsAfter),
+      'today holds only the growth, not the whole session total'
+    )
+    // Read the cards directly: the Today card must show the 250k growth, while
+    // the All-time card still shows the whole 1.25M session.
+    const cards = render(Section, { sessions: after }).props.children[2]
+    assert.ok(JSON.stringify(cards.props.children[1]).includes('250k'), 'the Today card reports the growth alone')
+    assert.ok(JSON.stringify(cards.props.children[2]).includes('1.3M'), 'the All-time card still reports the whole session')
+    console.log('[ok] attribution: continuing a session credits the growth (250k), not the total (1.3M)')
   }
 
-  // The unambiguous case still lands exactly: created and prompted the same day.
+  // A session first seen with usage and prompted today is exact: nothing
+  // pre-existed that this run failed to observe.
   {
     const sessions = fakeSessions([{
-      id: 'oneday', title: 'One day', at: now, createdAt: todayStart + 3600000,
+      id: 'fresh-session', title: 'One day', at: now, createdAt: todayStart + 3600000,
       usage: usage(1000, 2000, 500),
     }])
     const bars = barsOf(render(Side, { sessions, wide: true }))
-    assert.ok(Number(todayBar(bars).props.height) > 2, 'a session contained in one day fills today')
-    console.log('[ok] attribution: a session contained in one day lands on that day')
+    assert.ok(Number(todayBar(bars).props.height) > 2, 'a session first seen today fills today')
+    console.log('[ok] attribution: a session first seen today lands on today')
   }
 }
-
 // ------------------------------------------------ sessions without usage
 {
   // A session that never spent a token is dropped from every consumer: it
@@ -611,7 +622,7 @@ const dockProps = {
 {
   // No timestamps anywhere: totals and the table survive, the calendar does not.
   const sessions = fakeSessions([
-    { id: 'session-alpha', title: 'Alpha session', usage: usage(2000, 4000, 800) },
+    { id: 'session-undated', title: 'Alpha session', usage: usage(2000, 4000, 800) },
   ])
   const tree = render(Section, { sessions })
   const text = JSON.stringify(tree)

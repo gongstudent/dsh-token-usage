@@ -138,9 +138,19 @@ console.log('[ok] audit invariants: color-mix stays decorative, intensity is opa
 const bundleText = readFileSync(BUNDLE, 'utf8')
 assert.ok(!/summary\.updatedAt|summary\.lastActivityAt/.test(bundleText),
   'day attribution must never consult read or activity timestamps')
-assert.ok(/function sessionPromptAt/.test(bundleText) && /function sessionStartedAt/.test(bundleText),
-  'prompt time and creation time must stay separate concepts')
-console.log('[ok] day attribution: only prompt and creation stamps, never read stamps')
+// The list row carries no creation time at all (dsh-api-session-controller
+// spreads only parentSessionId/origin/cwd out of the header), so a session's
+// cumulative total must never be placed on one day. Per-day amounts come from
+// the growth this run observes, and the pre-existing lump lands on the last
+// prompt day only.
+assert.ok(/function sessionPromptAt/.test(bundleText), 'the prompt stamp stays the only timestamp concept')
+assert.ok(/const SPEND = new Map\(\)/.test(bundleText), 'observed spending is tracked per session')
+assert.ok(/byDay: recordSpend\(/.test(bundleText), 'each row carries its observed per-day amounts')
+assert.ok(/addInto\(bucket\.usage, row\.byDay\[key\]\)/.test(bundleText),
+  'the calendar must be built from observed per-day amounts, not from a session total')
+assert.ok(!/addInto\(today, row\.usage\)/.test(bundleText),
+  'a session total must never be credited to a single day')
+console.log('[ok] day attribution: observed growth only, never a cumulative total on one day')
 
 // The client Loader applies a plugin the moment it has no unmet dependency. With
 // an empty inject list this bundle applied BEFORE the renderer provided `slots`,

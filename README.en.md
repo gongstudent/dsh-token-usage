@@ -79,30 +79,38 @@ Everything the harness already publishes is read; nothing is computed twice.
 ### Attribution to a calendar day
 
 The heatmap answers "which day did these tokens go to", but the session list
-publishes only a cumulative total and one timestamp. So the rule is explicit:
+publishes **only two things**: a session's cumulative total and one timestamp.
+So the rule is explicit:
 
-1. **Only the prompt stamp counts** - `sessionListMetadata.lastPromptAt`.
-   **`updatedAt` / `lastActivityAt` / `at` are never consulted**: they are
-   read/activity stamps that move when a session is merely *opened*. An earlier
-   version used them as fallbacks, so opening an old conversation the next day
-   re-dated its entire history onto today.
-2. **A session is attributed to a day only when its whole life fits that day**
-   (`header.createdAt` and `lastPromptAt` on the same date). That case is exact.
-3. **A multi-day session cannot be attributed.** Its per-day split is not
-   published anywhere a client can read (the `tokenUsage` projection's wire view is
-   only `totals`). Rather than dump the whole total onto whichever day happens to
-   be its last, the plugin reports it separately: it is excluded from the
-   calendar and from Today, and the section shows "a further N tokens come from
-   M multi-day sessions". Those table rows are marked **multi-day**.
-4. A session with no timestamp at all stays out of the calendar but still
-   counts toward every total.
+1. **Only the prompt stamp counts** - `sessionListMetadata.lastPromptAt`, which the
+   host updates only on a real user message.
+   **`updatedAt` / `lastActivityAt` / `at` are never consulted** - they are read
+   and activity stamps.
+2. **A cumulative total is never dumped onto one day.** The list row does not
+   even carry the session's creation time (`summaryFor` in
+   `dsh-api-session-controller` spreads only `parentSessionId`/`origin`/`cwd` out of the header),
+   so whether a session spans days **cannot be determined on the client** - an
+   earlier version tried to detect it that way and the code never once ran.
+3. Per-day amounts come from **observed growth**: the plugin remembers the last
+   total it saw per session and credits the difference to the day it saw it.
+   Whatever already existed at first sight goes to the session's **last prompt
+   day**, the earliest day it is known to have been active, because that part was
+   spent before this run could observe anything.
+4. The bookkeeping is **in-memory only**: the plugin persists nothing and issues
+   no RPC. A restart therefore re-places each session's pre-existing lump on its
+   last prompt day; only growth observed while running is credited to the day it
+   actually happened.
 
-> **Why no per-turn split:** the client `sessions` service exposes only the list
-> snapshot, not the session event log (per-turn `usage` plus `event.time` live
-> there, on the host side). The reference implementation `dsh-cost-meter` gets this
-> right with a **persisted host-side ledger** (`turn-cost.js` / `backfill.js`); this
-> plugin deliberately persists nothing and issues no RPC.
+**In practice:** continue yesterday's conversation today and yesterday keeps its
+share - only today's growth lands in Today.
 
+> **Residual error:** if you already continued an old session today *before* the
+> app started, its first observed total is credited to today. Removing that needs
+> a persisted baseline (localStorage would do, still no RPC and no host writes),
+> which would break the "persists nothing" constraint - available on request.
+
+A session with no timestamp at all stays out of the calendar but still counts
+toward every total.
 There is **no host half**. `lib/index.js` is an empty Cordis plugin.
 Its only reason to exist: the client module system composes its browser boot
 graph by scanning **enabled** Loader entries, so a package needs a loadable
