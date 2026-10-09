@@ -61,8 +61,19 @@ function makeReact() {
   return React
 }
 
+/** A fake localStorage, so the ledger round-trip is testable. */
+function makeStorage(seed) {
+  const data = new Map(seed === undefined ? [] : Object.entries(seed))
+  return {
+    data,
+    getItem: (key) => (data.has(key) ? data.get(key) : null),
+    setItem: (key, value) => { data.set(key, String(value)) },
+    removeItem: (key) => { data.delete(key) },
+  }
+}
+
 /** Load the bundle against a fake DOM; returns its exports plus the DOM it touched. */
-function loadBundle() {
+function loadBundle(storage) {
   const react = makeReact()
   const injected = []
   const document = {
@@ -74,10 +85,12 @@ function loadBundle() {
   }
   let definition
   const errors = []
+  const store = storage === undefined ? makeStorage() : storage
   vm.runInNewContext(source, {
     window: { __ModuleLoader__: { load: (value) => { definition = value } } },
     document,
     navigator: { language: 'en' },
+    localStorage: store,
     console: { error: (...args) => errors.push(args), warn: () => {}, log: () => {} },
   })
   assert.ok(definition, 'bundle registers a module')
@@ -85,7 +98,7 @@ function loadBundle() {
     assert.equal(specifier, 'react', 'the bundle imports only the platform seed table')
     return react
   })
-  return { exported, react, injected, errors }
+  return { exported, react, injected, errors, store }
 }
 
 /** A fake client context; each facility can be withheld or sabotaged. */
@@ -170,7 +183,7 @@ function fakeSessions(rows) {
   return { list: { subscribe: () => () => {}, getSnapshot: () => ({ byId }) } }
 }
 
-const { exported, react, injected, errors } = loadBundle()
+const { exported, react, injected, errors, store } = loadBundle()
 
 // ---------------------------------------------------------------- envelope
 assert.equal(typeof exported.apply, 'function', 'exports.apply is a function')
@@ -513,6 +526,55 @@ const dockProps = {
     console.log('[ok] attribution: a session first seen today lands on today')
   }
 }
+// ------------------------------------------------- ledger persistence
+{
+  const DAY = 86400000
+  const now = Date.now()
+  const d = new Date(now)
+  const todayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
+  const past = todayStart - 3 * DAY + 9 * 3600000
+  const pd = new Date(past)
+  const pad = (n) => (n < 10 ? '0' + n : String(n))
+  const pastKey = pd.getFullYear() + '-' + pad(pd.getMonth() + 1) + '-' + pad(pd.getDate())
+
+  // This run must write the ledger it built, so the next one starts where it
+  // left off instead of re-placing every session's total on one day.
+  const Side = happyRegistered.find((entry) => entry.options.name === 'sidebar.footer.action').component
+  render(Side, {
+    sessions: fakeSessions([{ id: 'ledger-session', title: 'Ledger', at: past, usage: usage(1000000, 0, 0) }]),
+    wide: true,
+  })
+  assert.ok(store.data.has('dsh-token-usage.spend.v1'), 'the ledger is written to storage')
+  const written = JSON.parse(store.data.get('dsh-token-usage.spend.v1'))
+  assert.equal(written.v, 1, 'the ledger carries its format version')
+  assert.ok(written.s['ledger-session'], 'the observed session is in the ledger')
+  assert.ok(written.s['ledger-session'].d[pastKey], 'and keeps the day it was first seen on')
+  assert.ok(!written.s['growing-session'], 'a session that left the list is forgotten')
+
+  // A second load, seeded as if a previous run had already observed 1M three
+  // days ago: the growth this run sees is today's alone.
+  const seeded = makeStorage({
+    'dsh-token-usage.spend.v1': JSON.stringify({
+      v: 1,
+      s: { 'restored-session': { u: [1000000, 0, 0, 0], d: { [pastKey]: [1000000, 0, 0, 0] } } },
+    }),
+  })
+  const second = loadBundle(seeded)
+  const { ctx, registered } = makeCtx()
+  second.exported.apply(ctx)
+  const Restored = registered.find((entry) => entry.options.name === 'settings.section').component
+  const sessions = fakeSessions([{ id: 'restored-session', title: 'Restored', at: now, usage: usage(1000000, 0, 250000) }])
+  // The registered entry wraps the view in its error boundary, so descend the
+  // same way render() does - but through the second bundle's own React.
+  second.react.__reset()
+  const inner = Restored({ sessions }).props.children
+  second.react.__reset()
+  const cards = inner.type(inner.props).props.children[2]
+  assert.ok(JSON.stringify(cards.props.children[1]).includes('250k'), 'a restored ledger credits only the growth to today')
+  assert.ok(JSON.stringify(cards.props.children[2]).includes('1.3M'), 'and still totals the whole session')
+  console.log('[ok] persistence: a restored ledger credits only the growth to today')
+}
+
 // ------------------------------------------------ sessions without usage
 {
   // A session that never spent a token is dropped from every consumer: it

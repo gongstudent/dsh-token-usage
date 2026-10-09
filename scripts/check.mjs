@@ -144,7 +144,10 @@ assert.ok(!/summary\.updatedAt|summary\.lastActivityAt/.test(bundleText),
 // the growth this run observes, and the pre-existing lump lands on the last
 // prompt day only.
 assert.ok(/function sessionPromptAt/.test(bundleText), 'the prompt stamp stays the only timestamp concept')
-assert.ok(/const SPEND = new Map\(\)/.test(bundleText), 'observed spending is tracked per session')
+assert.ok(/const SPEND = loadSpend\(\)/.test(bundleText), 'observed spending is restored from the previous run')
+assert.ok(/function saveSpend\(\)/.test(bundleText), 'observed spending is written back')
+assert.ok(/dsh-token-usage\.spend\.v1/.test(bundleText), 'the ledger uses a versioned storage key')
+assert.ok(/SPEND_HORIZON_DAYS/.test(bundleText), 'the ledger is bounded by a horizon')
 assert.ok(/byDay: recordSpend\(/.test(bundleText), 'each row carries its observed per-day amounts')
 assert.ok(/addInto\(bucket\.usage, row\.byDay\[key\]\)/.test(bundleText),
   'the calendar must be built from observed per-day amounts, not from a session total')

@@ -96,18 +96,21 @@ So the rule is explicit:
    Whatever already existed at first sight goes to the session's **last prompt
    day**, the earliest day it is known to have been active, because that part was
    spent before this run could observe anything.
-4. The bookkeeping is **in-memory only**: the plugin persists nothing and issues
-   no RPC. A restart therefore re-places each session's pre-existing lump on its
-   last prompt day; only growth observed while running is credited to the day it
-   actually happened.
+4. The bookkeeping is **persisted in `localStorage`** (key
+   `dsh-token-usage.spend.v1`): browser-local, with **no RPC, no host write and no file**.
+   Only the last 200 days are kept, and only for sessions still in the list.
 
 **In practice:** continue yesterday's conversation today and yesterday keeps its
-share - only today's growth lands in Today.
+share - only today's growth lands in Today. **A restart does not lose it:** the
+next run reads the ledger back and credits only growth to the day it happened.
 
-> **Residual error:** if you already continued an old session today *before* the
-> app started, its first observed total is credited to today. Removing that needs
-> a persisted baseline (localStorage would do, still no RPC and no host writes),
-> which would break the "persists nothing" constraint - available on request.
+> Only the **very first run** (no ledger on disk yet) places each session's
+> pre-existing lump on its last prompt day. Deleting that localStorage key
+> returns to that state.
+
+> An earlier version deliberately persisted nothing, and the result was a
+> **constantly wrong number on every start**. Simplicity bought inaccuracy, which
+> is the wrong trade, so it changed.
 
 A session with no timestamp at all stays out of the calendar but still counts
 toward every total.
