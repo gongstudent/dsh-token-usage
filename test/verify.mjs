@@ -472,11 +472,47 @@ const dockProps = {
   assert.ok(past.length > 0, 'at least one past cell is interactive')
   assert.equal(typeof past[0].props.onClick, 'function', 'a past cell carries a click handler')
   assert.ok(String(past[0].props.title).length > 0, 'the cell tooltip names the day and its usage')
+
   const future = cells.filter((cell) => cell.props && cell.props.disabled === true)
-  assert.ok(future.length > 0, 'days after today are disabled rather than clickable')
+  const clickable = cells.filter((cell) => cell.props && cell.props.onClick !== undefined)
+  assert.equal(clickable.length + future.length, cells.length, 'every cell is either clickable or disabled')
+  assert.ok(clickable.length > 0, 'past days are clickable')
+  // The grid ends on the current week's Saturday, so on a Saturday itself there
+  // is no future day to disable. Asserting one exists made this test fail every
+  // Saturday.
+  if (new Date(now).getDay() !== 6) assert.ok(future.length > 0, 'days after today are disabled rather than clickable')
   console.log('[ok] settings: heatmap cells are clickable and carry a day summary')
 }
 
+// ------------------------------------------- cards follow the selected range
+{
+  const now = Date.now()
+  const DAY = 86400000
+  const pad = (n) => (n < 10 ? '0' + n : String(n))
+  const keyOf = (ms) => { const d = new Date(ms); return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) }
+  const dayStart = (ms) => { const d = new Date(ms); return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime() }
+  const today = dayStart(now)
+  const old = today - 10 * DAY
+  const bucket = (n) => ({ uncachedInputTokens: n, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 })
+
+  const sessions = fakeSessions([
+    { id: 'range-recent', title: 'Recent', at: now, usage: usage(1000000, 0, 0), byDay: { [keyOf(today)]: bucket(1000000) } },
+    { id: 'range-old', title: 'Old', at: old, usage: usage(3000000, 0, 0), byDay: { [keyOf(old)]: bucket(3000000) } },
+  ])
+
+  // Hook 4 is the range state. With no range every session counts.
+  const allCards = render(Section, { sessions }).props.children[2]
+  assert.ok(JSON.stringify(allCards.props.children[2]).includes('4M'), 'unfiltered, the total card sums every session')
+
+  // The heatmap and the table already narrowed to the range; the cards must too,
+  // or the page contradicts itself.
+  const ranged = render(Section, { sessions }, { 4: { from: today - 6 * DAY, to: today } }).props.children[2]
+  const totalCard = JSON.stringify(ranged.props.children[2])
+  assert.ok(totalCard.includes('1M'), 'with a range the total card narrows to it')
+  assert.ok(!totalCard.includes('4M'), 'and no longer reports the all-time figure')
+  assert.ok(JSON.stringify(ranged).includes('In range'), 'the card is relabelled so a window is never called all time')
+  console.log('[ok] settings: the cards answer for the selected range')
+}
 // ------------------------------------------- attribution to a calendar day
 {
   const now = Date.now()
