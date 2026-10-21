@@ -76,6 +76,19 @@ Everything the harness already publishes is read; nothing is computed twice.
 | Context composition | session projection `contextBreakdown` |
 | Cross-session totals, heatmap, table | each session's `projectionValues.tokenUsage` in the client session list (`ctx.sessions.list`) |
 
+### Archived sessions are excluded
+
+Archiving a session (the archive row in the session menu) puts it away: the
+sidebar stops showing it, and this page stops counting it. Restoring it brings it
+back immediately. This is the harness's own reversible mechanism.
+
+**Why not delete?** The harness has **no session-delete operation**. `workspaces` offers
+archive/unarchive and the pin pair; `sessions` offers create/fork/rename/search/
+dispose, and dispose only unloads a session from memory. Removing a directory
+under `~/.dsh/sessions/` would erase the data, but the host still holds the
+session in memory along with its index and projection cache, so doing that to an
+open or running session risks corrupting state irreversibly. Not done.
+
 ### Attribution to a calendar day
 
 The heatmap answers "which day did these tokens go to". The exact answer lives in

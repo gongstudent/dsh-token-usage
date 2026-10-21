@@ -92,6 +92,14 @@ DeepSeek Harness 的 **token 用量查看器**。三个挂载面：输入框读�
 
 **按会话** —— 会话 / 日期 / 模型 / 输入 tok / 缓存 tok / 输出 tok / 合计 tok，按时间倒序，最多 20 行。
 
+> **归档的会话不计入任何数字。** 「归档会话」就是把这个会话收起来：侧栏不再显示它，用量页也不再统计它。
+> 这是 DSH 自带的可撤销机制 —— 取消归档后它立刻回到统计里。
+>
+> **为什么不做「删除」**：DSH **没有删除会话的接口**。`workspaces` 服务只有 `archiveSession` /
+> `unarchiveSession` / pin 系列，`sessions` 服务只有 create / fork / rename / search / dispose
+> （dispose 只是从内存卸载，不删文件）。硬删 `~/.dsh/sessions/` 下的目录能抹掉数据，
+> 但宿主还持有内存状态、索引和投影缓存 —— 删一个正在用或正在跑的会话很可能状态错乱，且不可恢复。没做。
+
 > **日期筛选作用于整页**：卡片、热图、会话表都只统计所选区间。选了区间后「累计」会改名为「区间合计」——
 > 把一个窗口内的数字叫做「累计」是唯一比不过滤更糟的做法。
 
@@ -185,7 +193,7 @@ $cli = "D:\DeepSeek harness\resources\app.asar\dsh\node_modules\@deepseek-ai\dsh
 ## 开发
 
 `bash
-pnpm test         # 静态门禁 + 行为测试（41 条客户端断言 + 5 条宿主断言）
+pnpm test         # 静态门禁 + 行为测试（42 条客户端断言 + 5 条宿主断言）
 pnpm check        # 只跑静态门禁
 pnpm sync-tokens  # 从本机 DSH 重新生成主题 token 白名单
 `

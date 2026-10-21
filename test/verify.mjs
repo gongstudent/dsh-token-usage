@@ -61,6 +61,12 @@ function makeReact() {
   return React
 }
 
+/** A fake workspace service holding a fixed archived set. */
+function fakeWorkspaces(archived) {
+  const ids = archived === undefined ? [] : archived
+  return { list: { subscribe: () => () => {}, getSnapshot: () => ({ archivedSessionIds: ids }) } }
+}
+
 /** A fake localStorage, so the ledger round-trip is testable. */
 function makeStorage(seed) {
   const data = new Map(seed === undefined ? [] : Object.entries(seed))
@@ -506,13 +512,42 @@ const dockProps = {
 
   // The heatmap and the table already narrowed to the range; the cards must too,
   // or the page contradicts itself.
-  const ranged = render(Section, { sessions }, { 4: { from: today - 6 * DAY, to: today } }).props.children[2]
+  const ranged = render(Section, { sessions }, { 8: { from: today - 6 * DAY, to: today } }).props.children[2]
   const totalCard = JSON.stringify(ranged.props.children[2])
   assert.ok(totalCard.includes('1M'), 'with a range the total card narrows to it')
   assert.ok(!totalCard.includes('4M'), 'and no longer reports the all-time figure')
   assert.ok(JSON.stringify(ranged).includes('In range'), 'the card is relabelled so a window is never called all time')
   console.log('[ok] settings: the cards answer for the selected range')
 }
+// ------------------------------------------- archived sessions are excluded
+{
+  const now = Date.now()
+  const Side = happyRegistered.find((entry) => entry.options.name === 'sidebar.footer.action').component
+  const sessions = fakeSessions([
+    { id: 'arch-keep', title: 'Kept', at: now, usage: usage(1000000, 0, 0) },
+    { id: 'arch-gone', title: 'Filed away', at: now, usage: usage(3000000, 0, 0) },
+  ])
+
+  const all = render(Section, { sessions })
+  assert.ok(JSON.stringify(all.props.children[2].props.children[2]).includes('4M'), 'an ordinary session counts')
+
+  // Archiving is how a session is put away: the sidebar stops offering it, so a
+  // metering page must stop answering for it too.
+  const filtered = render(Section, { sessions, getWorkspaces: () => fakeWorkspaces(['arch-gone']) })
+  const totalCard = JSON.stringify(filtered.props.children[2].props.children[2])
+  assert.ok(totalCard.includes('1M'), 'an archived session leaves the totals')
+  assert.ok(!totalCard.includes('4M'), 'and no longer contributes to them')
+  assert.ok(!JSON.stringify(filtered).includes('Filed away'), 'and leaves the session table')
+
+  // With every session filed away there is nothing to report at all.
+  assert.equal(
+    render(Side, { sessions, wide: true, getWorkspaces: () => fakeWorkspaces(['arch-keep', 'arch-gone']) }),
+    null,
+    'a fully archived list renders nothing'
+  )
+  console.log('[ok] sessions: archived sessions are excluded from every figure')
+}
+
 // ------------------------------------------- attribution to a calendar day
 {
   const now = Date.now()
@@ -722,7 +757,7 @@ const dockProps = {
   // Hook 5 is the picked-day state; seeding it renders the drill-down line.
   const day = new Date(now)
   const dayKey = day.getFullYear() + '-' + String(day.getMonth() + 1).padStart(2, '0') + '-' + String(day.getDate()).padStart(2, '0')
-  const picked = render(Side, { sessions, wide: true }, { 5: dayKey })
+  const picked = render(Side, { sessions, wide: true }, { 9: dayKey })
   const pickedText = JSON.stringify(picked)
   assert.ok(pickedText.includes('tu-side-pick'), 'a picked day renders its own line')
   assert.ok(pickedText.includes('tu-spark-bar sel'), 'the picked bar is highlighted')
