@@ -5,8 +5,10 @@
 ## 这是什么
 
 DeepSeek Harness 的 token 用量查看器。三个挂载面：输入框读数、侧栏卡片、设置页报表。
-只读、不 import 任何 Harness Client 包。宿主半边**注册一个按天折叠的会话投影**（见下），
-客户端另外用 `localStorage` 记一份近似账本作为回退。
+默认只读，不 import 任何 Harness Client 包。宿主半边**注册一个按天折叠的会话投影**（见下），
+并在 `connection.fetch` 存在时额外注册一个**删除会话**路由（`POST /api/token-usage/delete-session`，
+侧栏会话右键菜单和设置页「按会话」表格每行的「删除」使用它）；客户端另外用 `localStorage` 记一份近似账本作为回退，
+删除时同步清掉对应条目。
 
 ## 硬性约束（改动时不能破坏）
 

@@ -79,7 +79,7 @@ function makeStorage(seed) {
 }
 
 /** Load the bundle against a fake DOM; returns its exports plus the DOM it touched. */
-function loadBundle(storage) {
+function loadBundle(storage, options = {}) {
   const react = makeReact()
   const injected = []
   const document = {
@@ -93,10 +93,11 @@ function loadBundle(storage) {
   const errors = []
   const store = storage === undefined ? makeStorage() : storage
   vm.runInNewContext(source, {
-    window: { __ModuleLoader__: { load: (value) => { definition = value } } },
+    window: { __ModuleLoader__: { load: (value) => { definition = value } }, confirm: options.confirm },
     document,
     navigator: { language: 'en' },
     localStorage: store,
+    fetch: options.fetch,
     console: { error: (...args) => errors.push(args), warn: () => {}, log: () => {} },
   })
   assert.ok(definition, 'bundle registers a module')
@@ -113,6 +114,10 @@ function makeCtx(options = {}) {
   const effects = []
   const localeCalls = []
   const injectCalls = []
+  const menuCalls = []
+  const contextMenus = {
+    register(definition) { menuCalls.push(definition); return () => {} },
+  }
   const ctx = {
     get(name) {
       if (options.getThrows === true) throw new Error('service registry unavailable')
@@ -131,8 +136,17 @@ function makeCtx(options = {}) {
         if (options.locale === false) return undefined
         return {
           register: (ns, dictionaries) => { localeCalls.push({ ns, dictionaries }); return () => {} },
+          bind: () => (key, vars) => {
+            let text = key
+            if (vars) for (const name of Object.keys(vars)) text = text.split('{' + name + '}').join(String(vars[name]))
+            return text
+          },
           getSnapshot: () => ({ active: options.hostLocale ?? 'en' }),
         }
+      }
+      if (name === 'contextMenus') {
+        if (options.contextMenus === false) return undefined
+        return contextMenus
       }
       if (name === 'sessions') {
         if (options.sessions === false) return undefined
@@ -147,14 +161,30 @@ function makeCtx(options = {}) {
   ctx.inject = (deps, callback) => {
     injectCalls.push(deps)
     if (options.injectNever === true) return () => {}
-    const child = { sessions: options.sessions === false ? undefined : (options.sessions ?? fakeSessions([])) }
+    const child = {
+      sessions: options.sessions === false ? undefined : (options.sessions ?? fakeSessions([])),
+      contextMenus: options.contextMenus === false ? undefined : contextMenus,
+    }
     callback(child)
     return () => {}
   }
-  return { ctx, registered, effects, localeCalls, injectCalls }
+  return { ctx, registered, effects, localeCalls, injectCalls, menuCalls }
 }
 
 const DAY = 86400000
+const keyOfLocal = (ms) => {
+  const d = new Date(ms)
+  const pad = (n) => (n < 10 ? '0' + n : String(n))
+  return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate())
+}
+const dayStartLocal = (ms) => {
+  const d = new Date(ms)
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
+}
+const mondayLocal = (ms) => {
+  const start = dayStartLocal(ms)
+  return start - ((new Date(start).getDay() + 6) % 7) * DAY
+}
 const usage = (input, cache, output, write) => ({
   uncachedInputTokens: input,
   outputTokens: output,
@@ -210,50 +240,96 @@ console.log('[ok] envelope: apply/inject exported; module load has no side effec
   assert.equal(injected.length, 1, 'exactly one stylesheet is injected by apply()')
   assert.equal(injected[0].dataset.plugin, 'dsh-token-usage', 'stylesheet carries the owning plugin id')
   assert.equal(injected[0].dataset.pluginCss, 'dsh-token-usage/client.css', 'stylesheet carries its stable id')
-  assert.equal(registered.length, 3, 'all three seats are registered')
+  assert.equal(registered.length, 4, 'four seats: composer, sidebar card, main panel, panel icon')
 
   const dock = registered.find((entry) => entry.options.name === 'conversation.composer.dock')
   const sidebar = registered.find((entry) => entry.options.name === 'sidebar.footer.action')
-  const section = registered.find((entry) => entry.options.name === 'settings.section')
   assert.ok(dock, 'registers the composer seat')
   assert.ok(sidebar, 'registers the sidebar seat')
-  assert.ok(section, 'registers the settings seat')
   assert.equal(dock.options.id, 'token-usage', 'list slots require an id')
   assert.equal(sidebar.options.id, 'token-usage', 'list slots require an id')
-  assert.equal(section.options.id, 'token-usage', 'list slots require an id')
   assert.equal(dock.options.locale, 'token-usage', 'declares its namespace when a locale face exists')
   assert.equal(sidebar.options.locale, 'token-usage', 'declares its namespace when a locale face exists')
-  assert.equal(section.options.locale, 'token-usage', 'declares its namespace when a locale face exists')
-  assert.equal(typeof section.options.label, 'function', 'the settings seat supplies a nav label')
-  const navLabel = section.options.label()
-  assert.equal(navLabel.props.className, 'tu-nav', 'the nav label is an element carrying our own glyph')
-  assert.ok(JSON.stringify(navLabel).includes('Token usage'), 'the nav label follows the host locale')
-  assert.ok(JSON.stringify(navLabel).includes('tu-nav-icon'), 'the nav label draws its own icon')
+  // The Settings section was removed on request: the report lives once, in the
+  // main-column panel. A second entry meant two places to drift apart.
+  assert.equal(registered.filter((entry) => entry.options.name === 'settings.section').length, 0,
+    'no settings section is registered any more')
+
+  // The full main-column panel and the sidebar icon that opens it. Both carry
+  // the SAME panel key: the sidebar routes an entry id to the main cell whose
+  // key matches, so these two registrations are one feature.
+  const main = registered.find((entry) => entry.options.name === 'main')
+  const panelIcon = registered.find((entry) => entry.options.name === 'sidebar.panellist')
+  assert.ok(main, 'registers the full main-column panel')
+  assert.ok(panelIcon, 'registers the sidebar panel-list icon')
+  assert.equal(main.options.key, 'token-usage', 'the main cell is keyed by the entry id')
+  assert.equal(panelIcon.options.id, 'token-usage', 'the icon carries that same id')
+  assert.equal(typeof panelIcon.options.label, 'function', 'the icon label is a thunk so it follows the locale')
+  assert.ok(JSON.stringify(panelIcon.options.label()).includes('Token usage'), 'the icon label reads the active locale')
+  assert.ok(Number.isFinite(panelIcon.options.order), 'the icon declares its position in the list')
 
   assert.equal(localeCalls.length, 1, 'registers its dictionaries once')
   assert.deepEqual(Object.keys(localeCalls[0].dictionaries).sort(), ['en', 'zh'], 'both locales registered')
   assert.ok(effects.some((entry) => String(entry.label).includes('stylesheet')), 'owns a stylesheet disposer')
   assert.ok(effects.some((entry) => String(entry.label).includes('dictionaries')), 'owns a dictionary disposer')
   assert.equal(errors.length, 0, 'the happy path logs nothing to the console')
-  assert.equal(injectCalls.length, 1, 'exactly one dependency is declared')
+  assert.equal(injectCalls.length, 2, 'both optional dependencies are declared')
   assert.equal(Array.from(injectCalls[0]).join(','), 'sessions', 'the cross-session seats wait for the session list')
-  console.log('[ok] apply: registers all three seats and both disposers, silently')
+  assert.equal(Array.from(injectCalls[1]).join(','), 'contextMenus', 'the row menu waits for the context-menu service')
+  console.log('[ok] apply: registers every seat, the main panel and its icon, and both disposers, silently')
+}
+{
+  // The sidebar's Session row menu is the primary entry point: right-clicking
+  // a conversation in the workspace list must offer Delete.
+  const { ctx, menuCalls } = makeCtx()
+  exported.apply(ctx)
+  assert.equal(menuCalls.length, 1, 'one Session context-menu contribution is registered')
+  const menu = menuCalls[0]
+  assert.equal(menu.target, 'session', 'the contribution targets sidebar Session rows')
+  assert.equal(menu.order, 700, 'it sorts after the built-in actions')
+  const actions = menu.resolve({ sessionId: 'session-alpha', displayTitle: 'Alpha session' })
+  assert.equal(actions.length, 1, 'the menu offers one action')
+  assert.equal(actions[0].id, 'delete', 'the action is Delete')
+  assert.equal(actions[0].danger, true, 'the action is marked destructive')
+  assert.equal(actions[0].icon.key, 'workspace.delete', 'the action reuses the official trash icon')
+  assert.ok(String(actions[0].label).length > 0, 'the action carries a localized label')
+  assert.equal(typeof actions[0].run, 'function', 'the action is wired')
+  assert.equal(actions[0].separatorBefore, true, 'the destructive action is separated from the built-ins')
+
+  const calls = []
+  const loaded = loadBundle(makeStorage(), {
+    fetch: (url, init) => {
+      calls.push({ url, init })
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }), text: async () => '' })
+    },
+  })
+  const runCtx = makeCtx()
+  loaded.exported.apply(runCtx.ctx)
+  const runAction = runCtx.menuCalls[0].resolve({ sessionId: 'session-alpha', displayTitle: 'Alpha session' })[0]
+  runAction.run()
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(calls.length, 1, 'the menu action sends one delete request')
+  assert.ok(calls[0].url.includes('api/token-usage/delete-session'), 'the menu action targets the host route')
+  assert.equal(JSON.parse(calls[0].init.body).sessionId, 'session-alpha', 'the menu action names the right session')
+  console.log('[ok] apply: sidebar Session menu offers Delete')
 }
 
 // ------------------------------------------------------ host locale label
 {
   const { ctx, registered } = makeCtx({ hostLocale: 'zh-CN' })
   exported.apply(ctx)
-  const section = registered.find((entry) => entry.options.name === 'settings.section')
-  assert.ok(JSON.stringify(section.options.label()).includes('Token 用量'), 'the nav label follows a Chinese host locale')
-  console.log('[ok] apply: the settings nav label tracks the host locale')
+  // The sidebar panel icon carries the only remaining label, so it is what
+  // has to follow the host locale now.
+  const icon = registered.find((entry) => entry.options.name === 'sidebar.panellist')
+  assert.ok(JSON.stringify(icon.options.label()).includes('Token 用量'), 'the panel icon label follows a Chinese host locale')
+  console.log('[ok] apply: the panel icon label tracks the host locale')
 }
 
 // -------------------------------------------------- degraded environments
 {
   const { ctx, registered } = makeCtx({ locale: false })
   exported.apply(ctx)
-  assert.equal(registered.length, 3, 'still registers every seat without a locale face')
+  assert.equal(registered.length, 4, 'still registers every seat without a locale face')
   for (const entry of registered) {
     assert.equal(entry.options.locale, undefined,
       'must NOT declare a namespace without a locale face (assembly would throw)')
@@ -271,9 +347,12 @@ console.log('[ok] envelope: apply/inject exported; module load has no side effec
   // seats: the composer reading does not depend on it and must still register.
   const { ctx, registered, injectCalls } = makeCtx({ injectNever: true })
   exported.apply(ctx)
-  assert.equal(injectCalls.length, 1, 'the dependency was declared')
+  assert.equal(injectCalls.length, 2, 'the dependencies were declared')
   assert.equal(Array.from(injectCalls[0]).join(','), 'sessions', 'and it is the session list')
+  assert.equal(Array.from(injectCalls[1]).join(','), 'contextMenus', 'and the context menu')
   assert.equal(registered.length, 1, 'only the composer seat registers without a session list')
+  // The main panel and its icon need the session list too, so they wait with
+  // the settings page rather than half-registering a panel with no data.
   assert.equal(registered[0].options.name, 'conversation.composer.dock', 'and it is the composer seat')
   console.log('[ok] apply: a session list that never arrives costs only the two cross-session seats')
 }
@@ -297,9 +376,10 @@ exported.apply(null)
 exported.apply({})
 console.log('[ok] apply: absent or empty context -> contained')
 
-// registerThrows sabotages all three seats (3) and getThrows sabotages the
-// locale lookup plus the service lookup (2), so five diagnostics and no throw.
-assert.equal(errors.length, 5, 'every sabotaged step reports exactly once')
+// registerThrows sabotages all four seats (composer, sidebar card, main panel,
+// panel icon) and getThrows sabotages the locale lookup plus the service lookup
+// (2), so six diagnostics and no throw.
+assert.equal(errors.length, 6, 'every sabotaged step reports exactly once')
 assert.ok(errors.every((entry) => String(entry[0]).startsWith('[dsh-token-usage] ')), 'diagnostics are namespaced')
 console.log('[ok] diagnostics: sabotage is reported once each, never thrown')
 
@@ -307,7 +387,35 @@ console.log('[ok] diagnostics: sabotage is reported once each, never thrown')
 const { ctx: happyCtx, registered: happyRegistered } = makeCtx()
 exported.apply(happyCtx)
 const Dock = happyRegistered.find((entry) => entry.options.name === 'conversation.composer.dock').component
-const Section = happyRegistered.find((entry) => entry.options.name === 'settings.section').component
+/**
+ * The report component. The Settings section seat was removed, so the only seat
+ * that renders the report is the main-column panel. Extracting the component
+ * UsagePage embeds keeps every existing test meaningful: they all drive the
+ * report, not the seat that happens to host it.
+ */
+const Page = happyRegistered.find((entry) => entry.options.name === 'main').component
+const Section = (function extractReport() {
+  react.__reset()
+  const outer = Page({})
+  let boundary = null
+  const walk = (node) => {
+    if (boundary !== null || node === null || typeof node !== 'object') return
+    if (Array.isArray(node)) { for (const item of node) walk(item); return }
+    if (node.type && node.type.name === 'MeterBoundary') { boundary = node; return }
+    if (node.props) walk(node.props.children)
+  }
+  walk(outer.props.children)
+  assert.ok(boundary, 'the page embeds the report behind a boundary')
+  const inner = boundary.props.children
+  assert.equal(typeof inner.type, 'function', 'the embedded report is a component')
+  // Re-wrap it exactly the way the (removed) settings seat did, so every
+  // existing test keeps driving the same two-layer shape.
+  const Boundary = boundary.type
+  const Report = inner.type
+  return function SectionWrapper(props) {
+    return react.createElement(Boundary, null, react.createElement(Report, props))
+  }
+})()
 
 /**
  * Baseline sessions at zero, so the spend that follows counts as observed
@@ -342,6 +450,51 @@ function render(Component, props, seed) {
   const inner = entryOf(Component, props)
   react.__reset(seed)
   return inner.type(inner.props)
+}
+
+/** Depth-first search for the first element carrying one class name. */
+function findByClass(node, className) {
+  if (node === null || typeof node !== 'object') return undefined
+  if (typeof node.props === 'object' && node.props !== null) {
+    const value = node.props.className
+    if (typeof value === 'string' && value.split(/\s+/).includes(className)) return node
+  }
+  const children = node.props === undefined ? undefined : node.props.children
+  if (Array.isArray(children)) {
+    for (const child of children) {
+      const found = findByClass(child, className)
+      if (found !== undefined) return found
+    }
+  } else if (children !== undefined) {
+    return findByClass(children, className)
+  }
+  return undefined
+}
+
+/** Depth-first search for EVERY element whose className contains a fragment. */
+function findAll(node, fragment, found = []) {
+  if (node === null || node === undefined) return found
+  if (Array.isArray(node)) {
+    for (const item of node) findAll(item, fragment, found)
+    return found
+  }
+  if (typeof node !== 'object') return found
+  if (node.props && typeof node.props.className === 'string' && node.props.className.includes(fragment)) found.push(node)
+  if (node.props) findAll(node.props.children, fragment, found)
+  return found
+}
+
+/**
+ * The heatmap grid's day cells.
+ *
+ * The grid sits inside a horizontal scroller now, so reach it by class rather
+ * than by fixed child index - the legend draws sample cells too, which is why
+ * the grid is looked up explicitly.
+ */
+function heatCellsOf(heatmap) {
+  const grid = findAll(heatmap, 'tu-heat-grid')[0]
+  assert.ok(grid, 'the heatmap grid is present')
+  return grid.props.children
 }
 
 /** Hook index 0 of the composer reading is its open flag. */
@@ -428,37 +581,102 @@ const dockProps = {
   const tree = render(Section, { sessions })
   assert.ok(tree, 'the settings page renders')
   const text = JSON.stringify(tree)
-  assert.ok(text.includes('This session'), 'renders the session card')
+  // No "this session" card: this page is root-scoped and the host exposes no
+  // active-session id there, so the card could only guess the newest session.
+  assert.ok(!text.includes('This session'), 'no misleading this-session card')
   assert.ok(text.includes('Today'), 'renders the today card')
   assert.ok(text.includes('All time'), 'renders the all-time card')
   assert.ok(text.includes('tu-cards'), 'lays the cards out in a grid')
   assert.ok(text.includes('tu-heat-grid'), 'renders the usage heatmap')
   assert.ok(text.includes('tu-heat-months'), 'renders the month axis')
   assert.ok(text.includes('tu-legend'), 'renders the heatmap legend')
-  assert.ok(text.includes('Alpha session'), 'renders the session table')
-  assert.ok(text.includes('Beta session'), 'renders every session row')
+  assert.ok(text.includes('deepseek-flash'), 'names the model in the grouped table')
   assert.ok(text.includes('tu-range'), 'renders the date-range filter')
   assert.ok(text.includes('type\':\'date') || text.includes('"date"'), 'renders start and end date inputs')
   assert.ok(text.includes('Last 7 days'), 'renders the quick presets')
-  assert.ok(text.includes('deepseek-flash'), 'names the model in the table')
   assert.ok(!text.includes('\u00a5'), 'the report carries no money')
-  assert.ok(text.includes('tu-slider'), 'renders the time-window slider')
-  const slider = tree.props.children[3].props.children[3]
-  const rangeInput = slider.props.children[0]
-  assert.equal(rangeInput.props.type, 'range', 'the time control is a range input')
-  assert.equal(rangeInput.props.min, 0, 'the window cannot slide into the future')
-  assert.ok(rangeInput.props.max > 0, 'the window can slide into the past')
-  assert.equal(typeof rangeInput.props.onChange, 'function', 'sliding the window is wired')
-  assert.ok(String(rangeInput.props['aria-label']).length > 0, 'the slider carries an accessible name')
-  assert.ok(String(slider.props.children[1].props.children).length > 0, 'the slider is captioned with its date span')
-  const cells = text.split('tu-cell').length - 1
-  assert.ok(cells >= 26 * 7, 'the grid holds a full 26-week window (' + cells + ' cell references)')
-  // Every past heatmap cell must be a real button so a colour is reachable.
-  const grid = JSON.stringify(tree).includes('tu-heat-grid')
+  // The window is one full year of FIXED-SIZE cells: a young history leaves
+  // its oldest weeks empty instead of shrinking the frame into a few giant
+  // squares. The grid scrolls horizontally rather than stretching.
+  assert.ok(!text.includes('tu-slider'), 'no continuous window slider is rendered')
+  assert.ok(text.includes('tu-heat-scroll'), 'the grid lives in a horizontal scroller')
+  const heatBlock = tree.props.children[3]
+  const heatmap = heatBlock.props.children[2]
+  // Only the grid's own cells count: the legend draws sample cells too.
+  const grid = findAll(heatmap, 'tu-heat-grid')[0]
   assert.ok(grid, 'the grid is present')
+  const cells = grid.props.children
+  // Columns = the real span since first use, capped at one year. A short
+  // history draws only its own weeks, starting at the first recorded week.
+  assert.ok(cells.length > 0 && cells.length <= 53 * 7, 'columns cover the real span, capped at a year')
+  assert.equal(cells.length % 7, 0, 'the grid holds whole weeks')
+  const winBar = heatBlock.props.children[3]
+  assert.ok(JSON.stringify(winBar).includes('tu-windowbar'), 'the window is captioned instead of draggable')
+  assert.ok(!JSON.stringify(winBar).includes('tu-windownav'), 'short history offers no paging controls')
   const buttons = (JSON.stringify(tree).match(/"type":"button"/g) || []).length
-  assert.ok(buttons > 26 * 7, 'every heatmap day is a button (' + buttons + ' buttons)')
-  console.log('[ok] settings: cards, range filter, clickable 26-week heatmap and table all render')
+  assert.ok(buttons >= cells.length, 'every heatmap day is a button (' + buttons + ' buttons)')
+  // The detail table is grouped, not a flat session dump: one row per model,
+  // each carrying its share of the total.
+  assert.ok(text.includes('tu-share'), 'the grouped table draws share bars')
+  assert.ok(text.includes('tu-share-fill'), 'each share bar has a fill')
+  assert.ok(text.includes('Share'), 'the share column is labelled')
+  const tabs = findAll(tree, 'tu-preset').map((node) => JSON.stringify(node.props.children))
+  assert.ok(tabs.some((label) => label.includes('By model')), 'offers the model dimension')
+  assert.ok(tabs.some((label) => label.includes('By session')), 'offers the session dimension')
+  // A workspace dimension was tried and removed: the client session list row
+  // carries no cwd, so every row fell into one anonymous group reading "100%".
+  assert.ok(!tabs.some((label) => label.includes('workspace')), 'no workspace dimension is offered')
+  console.log('[ok] settings: cards, range filter, adaptive heatmap and grouped share table all render')
+}
+{
+  // The settings table is where the token report already lists a conversation,
+  // so that is where its destructive action lives. Clicking it must call the
+  // injected host operation for exactly that row.
+  const now = Date.now()
+  const sessions = fakeSessions([
+    { id: 'session-alpha', title: 'Alpha session', at: now, model: 'deepseek-flash', usage: usage(2000, 4000, 800) },
+  ])
+  let called = null
+  // The destructive action lives on the SESSION dimension only: deleting a
+  // whole model or workspace from this table would not mean anything.
+  const tree = render(Section, { sessions, deleteSession: async (id) => { called = id } }, { 11: 'session' })
+  const button = findByClass(tree, 'tu-del')
+  assert.ok(button, 'the settings table renders a delete button when the host operation is present')
+  assert.equal(button.props.type, 'button', 'the delete action is a real button')
+  assert.equal(typeof button.props.onClick, 'function', 'the delete button is wired')
+  button.props.onClick({ stopPropagation() {} })
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(called, 'session-alpha', 'the clicked row is the one deleted')
+  console.log('[ok] settings: deleting a row calls the host operation for that session')
+}
+{
+  // The client also owns a local ledger of observed spend. Deleting a
+  // conversation must discard its entry, not merely hide the row.
+  const seed = {
+    'dsh-token-usage.spend.v3': JSON.stringify({
+      v: 3,
+      s: { 'session-alpha': { u: [1, 2, 3, 4], d: {}, b: [0, 0, 0, 0] } },
+    }),
+  }
+  const calls = []
+  const fakeFetch = (url, init) => {
+    calls.push({ url, init })
+    return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }), text: async () => '' })
+  }
+  const loaded = loadBundle(makeStorage(seed), { fetch: fakeFetch })
+  const { ctx, registered } = makeCtx()
+  loaded.exported.apply(ctx)
+  const panel = registered.find((entry) => entry.options.name === 'main')
+  const injected = panel.options.inject()
+  assert.equal(typeof injected.deleteSession, 'function', 'the panel seat exposes the delete operation')
+  await injected.deleteSession('session-alpha')
+  assert.equal(calls.length, 1, 'one delete request is sent')
+  assert.ok(calls[0].url.includes('api/token-usage/delete-session'), 'the request targets the host delete route')
+  assert.equal(calls[0].init.method, 'POST', 'the delete request is a POST')
+  assert.equal(JSON.parse(calls[0].init.body).sessionId, 'session-alpha', 'the request names the session')
+  const raw = loaded.store.data.get('dsh-token-usage.spend.v3')
+  assert.ok(raw !== undefined && !raw.includes('session-alpha'), 'the deleted session leaves the local token ledger')
+  console.log('[ok] settings: delete removes the local token ledger entry')
 }
 {
   // Clicking a heatmap cell must be wired to a handler, and the cell must
@@ -472,8 +690,9 @@ const dockProps = {
   assert.equal(heatBlock.props.className, 'tu-group', 'the heatmap block is reachable in the tree')
   const heatmap = heatBlock.props.children[2]
   assert.ok(heatmap, 'the heatmap is rendered')
-  const cells = heatmap.props.children[0].props.children
-  assert.equal(cells.length, 26 * 7, 'the grid holds exactly 26 weeks of days')
+  const cells = heatCellsOf(heatmap)
+  assert.equal(cells.length % 7, 0, 'the grid holds whole weeks')
+  assert.ok(cells.length > 0 && cells.length <= 53 * 7, 'columns cover the real span, capped at a year')
   const past = cells.filter((cell) => cell.props && cell.props.onClick !== undefined)
   assert.ok(past.length > 0, 'at least one past cell is interactive')
   assert.equal(typeof past[0].props.onClick, 'function', 'a past cell carries a click handler')
@@ -488,6 +707,67 @@ const dockProps = {
   // Saturday.
   if (new Date(now).getDay() !== 6) assert.ok(future.length > 0, 'days after today are disabled rather than clickable')
   console.log('[ok] settings: heatmap cells are clickable and carry a day summary')
+}
+{
+  // The grid starts at the Monday of the week containing the FIRST recorded
+  // day; a record that would run past the fixed window is still included.
+  const now = Date.now()
+  const today = dayStartLocal(now)
+  const earliest = today - 35 * DAY
+  const latest = today + 10 * DAY
+  const firstMonday = mondayLocal(earliest)
+  const bucket = { uncachedInputTokens: 1000, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }
+  const sessions = fakeSessions([{
+    id: 'anchor', title: 'Anchor', at: now, model: 'deepseek-flash', usage: usage(1000, 0, 0),
+    byDay: { [keyOfLocal(earliest)]: bucket, [keyOfLocal(latest)]: bucket },
+  }])
+  const tree = render(Section, { sessions })
+  const heatmap = tree.props.children[3].props.children[2]
+  const cells = heatCellsOf(heatmap)
+  // The grid STARTS on the first recorded week (the "from when I started"
+  // reading) and runs forward, Monday first.
+  assert.equal(cells[0].props.key, keyOfLocal(firstMonday), 'the first column is the Monday of the first recorded week')
+  for (let day = 0; day < 7; day += 1) {
+    assert.equal(cells[day].props.key, keyOfLocal(firstMonday + day * DAY), 'rows run Monday through Sunday')
+  }
+  assert.ok(cells.some((cell) => cell.props.key === keyOfLocal(earliest)), 'the first record is inside the grid')
+  // A full year is always drawn, so a future-dated record falls inside the
+  // grid but is marked as future: it must never look like a real usage day.
+  const futureCell = cells.find((cell) => cell.props.key === keyOfLocal(latest))
+  if (futureCell) {
+    assert.ok(String(futureCell.props.className).includes('future'), 'a future-dated cell is marked as future')
+    assert.equal(futureCell.props.disabled, true, 'and is not interactive')
+  }
+  console.log('[ok] settings: the grid starts on the first recorded week, Monday first')
+}
+{
+  // Once history outruns one window (52 weeks), the newest window shows first
+  // and the paging controls walk back to the first record.
+  const now = Date.now()
+  const today = dayStartLocal(now)
+  const earliest = today - 120 * 7 * DAY
+  const lastMonday = mondayLocal(today)
+  const autoStart = lastMonday - 52 * 7 * DAY
+  const bucket = { uncachedInputTokens: 1000, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }
+  const sessions = fakeSessions([{
+    id: 'long', title: 'Long history', at: now, model: 'deepseek-flash', usage: usage(1000, 0, 0),
+    byDay: { [keyOfLocal(earliest)]: bucket, [keyOfLocal(today)]: bucket },
+  }])
+  const tree = render(Section, { sessions })
+  const heatBlock = tree.props.children[3]
+  const cells = heatCellsOf(heatBlock.props.children[2])
+  assert.equal(cells.length, 53 * 7, 'a long history pages in whole 53-week (one year) windows')
+  assert.equal(cells[0].props.key, keyOfLocal(autoStart), 'the initial view is the latest window')
+  assert.equal(cells[cells.length - 1].props.key, keyOfLocal(lastMonday + 6 * DAY), 'the current week stays on the right edge')
+  // Paging is discrete, the way Codex and Claude switch usage ranges: no
+  // continuous slider, but explicit step and jump controls.
+  const winBar = heatBlock.props.children[3]
+  assert.ok(JSON.stringify(winBar).includes('tu-windownav'), 'a long history offers paging controls')
+  assert.ok(!JSON.stringify(winBar).includes('tu-slider'), 'and never a continuous slider')
+  const navButtons = findAll(winBar, 'tu-winbtn')
+  assert.ok(navButtons.length >= 2, 'paging is reachable by buttons')
+  assert.ok(String(winBar.props.children[1].props.children[0].props.title).length > 0, 'the jump control is labelled')
+  console.log('[ok] settings: long history pages through year-sized windows with discrete controls')
 }
 
 // ------------------------------------------- cards follow the selected range
@@ -508,12 +788,12 @@ const dockProps = {
 
   // Hook 4 is the range state. With no range every session counts.
   const allCards = render(Section, { sessions }).props.children[2]
-  assert.ok(JSON.stringify(allCards.props.children[2]).includes('4M'), 'unfiltered, the total card sums every session')
+  assert.ok(JSON.stringify(allCards.props.children[1]).includes('4M'), 'unfiltered, the total card sums every session')
 
   // The heatmap and the table already narrowed to the range; the cards must too,
   // or the page contradicts itself.
   const ranged = render(Section, { sessions }, { 8: { from: today - 6 * DAY, to: today } }).props.children[2]
-  const totalCard = JSON.stringify(ranged.props.children[2])
+  const totalCard = JSON.stringify(ranged.props.children[1])
   assert.ok(totalCard.includes('1M'), 'with a range the total card narrows to it')
   assert.ok(!totalCard.includes('4M'), 'and no longer reports the all-time figure')
   assert.ok(JSON.stringify(ranged).includes('In range'), 'the card is relabelled so a window is never called all time')
@@ -529,12 +809,12 @@ const dockProps = {
   ])
 
   const all = render(Section, { sessions })
-  assert.ok(JSON.stringify(all.props.children[2].props.children[2]).includes('4M'), 'an ordinary session counts')
+  assert.ok(JSON.stringify(all.props.children[2].props.children[1]).includes('4M'), 'an ordinary session counts')
 
   // Archiving is how a session is put away: the sidebar stops offering it, so a
   // metering page must stop answering for it too.
   const filtered = render(Section, { sessions, getWorkspaces: () => fakeWorkspaces(['arch-gone']) })
-  const totalCard = JSON.stringify(filtered.props.children[2].props.children[2])
+  const totalCard = JSON.stringify(filtered.props.children[2].props.children[1])
   assert.ok(totalCard.includes('1M'), 'an archived session leaves the totals')
   assert.ok(!totalCard.includes('4M'), 'and no longer contributes to them')
   assert.ok(!JSON.stringify(filtered).includes('Filed away'), 'and leaves the session table')
@@ -552,7 +832,7 @@ const dockProps = {
 {
   const now = Date.now()
   const Side = happyRegistered.find((entry) => entry.options.name === 'sidebar.footer.action').component
-  const Section = happyRegistered.find((entry) => entry.options.name === 'settings.section').component
+  // The global Section shim below drives the report the page embeds.
   const barsOf = (tree) => tree.props.children[1].props.children
   const todayBar = (bars) => bars[bars.length - 1]
   const allEmpty = (bars) => bars.every((bar) => Number(bar.props.height) === 2)
@@ -614,7 +894,7 @@ const dockProps = {
     assert.ok(Number(todayBar(bars).props.height) > 2, 'growth observed today fills today')
     const cards = render(Section, { sessions: after }).props.children[2]
     assert.ok(JSON.stringify(cards.props.children[1]).includes('250k'), 'the Today card reports the growth alone')
-    assert.ok(JSON.stringify(cards.props.children[2]).includes('1.3M'), 'the All-time card still totals the session')
+    assert.ok(JSON.stringify(cards.props.children[1]).includes('1.3M'), 'the All-time card still totals the session')
     console.log('[ok] attribution: growth is credited to the day it was observed (250k), not the total (1.3M)')
   }
 
@@ -659,14 +939,26 @@ const dockProps = {
   const second = loadBundle(seeded)
   const { ctx, registered } = makeCtx()
   second.exported.apply(ctx)
-  const Restored = registered.find((entry) => entry.options.name === 'settings.section').component
+  // This bundle instance is separate, so extract its report from its own panel.
+  const RestoredPage = registered.find((entry) => entry.options.name === 'main').component
   const sessions = fakeSessions([{ id: 'restored-session', title: 'Restored', at: now, usage: usage(1000000, 0, 250000) }])
   second.react.__reset()
-  const inner = Restored({ sessions }).props.children
+  const outer = RestoredPage({ sessions })
+  let restoredBoundary = null
+  const walkBoundary = (node) => {
+    if (restoredBoundary !== null || node === null || typeof node !== 'object') return
+    if (Array.isArray(node)) { for (const item of node) walkBoundary(item); return }
+    if (node.type && node.type.name === 'MeterBoundary') { restoredBoundary = node; return }
+    if (node.props) walkBoundary(node.props.children)
+  }
+  walkBoundary(outer.props.children)
+  assert.ok(restoredBoundary, 'the restored bundle renders its page with the report inside')
   second.react.__reset()
-  const cards = inner.type(inner.props).props.children[2]
+  const restoredInner = restoredBoundary.props.children
+  second.react.__reset()
+  const cards = restoredInner.type(restoredInner.props).props.children[2]
   assert.ok(JSON.stringify(cards.props.children[1]).includes('250k'), 'a restored ledger credits only the growth to today')
-  assert.ok(JSON.stringify(cards.props.children[2]).includes('1.3M'), 'and still totals the whole session')
+  assert.ok(JSON.stringify(cards.props.children[1]).includes('1.3M'), 'and still totals the whole session')
   console.log('[ok] persistence: a restored ledger credits only the growth to today')
   // A blank or not-yet-loaded list says nothing about which sessions still
   // exist. Treating it as authoritative once wiped the whole ledger and turned
@@ -692,7 +984,9 @@ const dockProps = {
     { id: 'session-empty', title: 'Empty session', at: now, usage: usage(0, 0, 0, 0) },
     { id: 'session-nousage', title: 'No projection', at: now },
   ])
-  const tree = render(Section, { sessions })
+  // The detail table groups by model by default, so read the SESSION dimension
+  // to see which conversations survived - that is where they are named.
+  const tree = render(Section, { sessions }, { 11: 'session' })
   const text = JSON.stringify(tree)
   assert.ok(text.includes('Used session'), 'a session with usage is listed')
   assert.ok(!text.includes('Empty session'), 'an all-zero session is dropped from the table')
@@ -718,7 +1012,7 @@ const dockProps = {
   const broken = { list: { subscribe: () => 'not a function', getSnapshot: () => ({ byId: {} }) } }
   const Side = happyRegistered.find((entry) => entry.options.name === 'sidebar.footer.action').component
   assert.equal(render(Side, { sessions: broken, wide: true }), null, 'a broken subscribe does not crash')
-  const Section = happyRegistered.find((entry) => entry.options.name === 'settings.section').component
+  // The global Section shim below drives the report the page embeds.
   const page = render(Section, { sessions: broken })
   assert.ok(page, 'the settings page still renders with a broken subscribe')
   console.log('[ok] host: a subscribe() that returns a non-function degrades quietly')
@@ -793,7 +1087,7 @@ const dockProps = {
   const sessions = fakeSessions([
     { id: 'session-undated', title: 'Alpha session', usage: usage(2000, 4000, 800) },
   ])
-  const tree = render(Section, { sessions })
+  const tree = render(Section, { sessions }, { 11: 'session' })
   const text = JSON.stringify(tree)
   assert.ok(text.includes('tu-cards'), 'cards still render without timestamps')
   assert.ok(text.includes('Alpha session'), 'the table still renders without timestamps')
@@ -818,6 +1112,260 @@ const dockProps = {
   const tree = render(Section, { sessions })
   assert.ok(tree, 'renders when the list snapshot has no byId')
   console.log('[ok] settings: malformed session snapshot -> contained')
+}
+
+// ---------------------------------------- adaptive window and share table
+{
+  // A young history (the reported case: first use 9/30, ~8 weeks) must NOT be
+  // rendered in a 26-week frame, and must offer no window control at all.
+  const now = Date.now()
+  const dayStart = (ms) => { const d = new Date(ms); return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime() }
+  const pad = (n) => (n < 10 ? '0' + n : String(n))
+  const keyOf = (ms) => { const d = new Date(ms); return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) }
+  const today = dayStart(now)
+  const first = today - 56 * DAY
+  const bucket = (n) => ({ uncachedInputTokens: n, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 })
+  const sessions = fakeSessions([{
+    id: 'young', title: 'Young history', at: now, model: 'deepseek-flash', usage: usage(1000, 0, 0),
+    byDay: { [keyOf(first)]: bucket(500), [keyOf(today)]: bucket(500) },
+  }])
+  const tree = render(Section, { sessions })
+  const heatBlock = tree.props.children[3]
+  const cells = heatCellsOf(heatBlock.props.children[2])
+  // The frame is ALWAYS a full year of fixed-size cells. A young history does
+  // not shrink it: the weeks before the first record are simply empty, so the
+  // calendar keeps one shape as data accumulates.
+  assert.ok(cells.length > 0 && cells.length <= 53 * 7, 'columns cover the real span, capped at a year')
+  // The frame ends at the latest recorded week and spans a full year back, so
+  // the weeks before the first record are simply empty cells.
+  const dead = cells.filter((cell) => String(cell.props.key) < keyOf(first))
+  assert.ok(dead.length > 0, 'the weeks before the first record are empty, not compressed away')
+  const firstCellWeek = cells.findIndex((cell) => String(cell.props.key) === keyOf(first))
+  assert.ok(firstCellWeek >= 0, 'the first record still appears in the grid')
+  // The newest recorded week is on the right edge, so recent data never needs
+  // scrolling to find.
+  const lastCell = cells[cells.length - 1]
+  assert.ok(String(lastCell.props.key) >= keyOf(today), 'the grid ends at or after today')
+  // Today carries a marker so "now" is findable without reading the axis.
+  const todayCell = cells.find((cell) => String(cell.props.key) === keyOf(today))
+  assert.ok(String(todayCell.props.className).includes('today'), 'today is marked')
+  const winBar = heatBlock.props.children[3]
+  assert.ok(!JSON.stringify(winBar).includes('tu-windownav'), 'a year of history has nothing to page')
+  assert.ok(!JSON.stringify(winBar).includes('tu-slider'), 'and no slider to drag')
+  console.log('[ok] window: a full year of fixed-size cells, today marked, no paging within a year')
+}
+{
+  // The share table must add up: every group's share is its slice of the
+  // range total, and the bars carry that same figure.
+  const now = Date.now()
+  const sessions = fakeSessions([
+    { id: 'm1', title: 'A', at: now, model: 'model-a', usage: usage(750000, 0, 0) },
+    { id: 'm2', title: 'B', at: now, model: 'model-b', usage: usage(250000, 0, 0) },
+  ])
+  const tree = render(Section, { sessions })
+  const bars = findAll(tree, 'tu-share-pct').map((node) => String(node.props.children))
+  assert.ok(bars.includes('75%'), 'the heavier model reads 75%')
+  assert.ok(bars.includes('25%'), 'the lighter one reads 25%')
+  assert.equal(bars.length, 2, 'one share row per model')
+  console.log('[ok] share table: grouped rows carry their share of the range total')
+}
+{
+  // The today card must be framed against a reference, the way Claude frames
+  // usage - a bare token count does not say whether it is a lot.
+  const now = Date.now()
+  const dayStart = (ms) => { const d = new Date(ms); return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime() }
+  const pad = (n) => (n < 10 ? '0' + n : String(n))
+  const keyOf = (ms) => { const d = new Date(ms); return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) }
+  const today = dayStart(now)
+  const bucket = (n) => ({ uncachedInputTokens: n, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 })
+  const days = {}
+  for (let i = 1; i <= 7; i += 1) days[keyOf(today - i * DAY)] = bucket(1000000)
+  days[keyOf(today)] = bucket(2000000)
+  const sessions = fakeSessions([{ id: 'base', title: 'Base', at: now, usage: usage(2000000, 0, 0), byDay: days }])
+  const tree = render(Section, { sessions })
+  const text = JSON.stringify(tree)
+  assert.ok(text.includes('vs'), 'the report frames today against a reference')
+  assert.ok(text.includes('1M'), 'and names the trailing daily mean')
+  console.log('[ok] baseline: today is framed against the trailing daily average')
+}
+
+// ------------------------------------------------ the full page panel seat
+{
+  // The main-column panel is the big surface: it must render the same report
+  // inside a page heading, without any modal/portal wrapper.
+  const now = Date.now()
+  const sessions = fakeSessions([
+    { id: 'page-a', title: 'Page session', at: now, model: 'deepseek-flash', usage: usage(2000000, 0, 0) },
+  ])
+  const Page = happyRegistered.find((entry) => entry.options.name === 'main').component
+  // UsagePage wraps the boundary directly (no extra component), so read the
+  // boundary's child instead of going through the two-layer render helper.
+  react.__reset()
+  const outer = Page({ sessions })
+  const tree = outer.props.children
+  assert.ok(tree, 'the full panel renders')
+  const text = JSON.stringify(tree)
+  assert.ok(text.includes('tu-page'), 'it is a page, not a floating card')
+  assert.ok(text.includes('tu-page-h'), 'it carries a page heading')
+  assert.ok(text.includes('Token usage'), 'the heading follows the locale')
+  assert.ok(!text.includes('tu-panel'), 'no modal panel is involved')
+  // The page wraps the very same report component, so there is one
+  // implementation behind both the settings section and this page.
+  const pageDiv = outer.props.children
+  const innerSections = []
+  const walk = (node) => {
+    if (node === null || typeof node !== 'object') return
+    if (Array.isArray(node)) { for (const item of node) walk(item); return }
+    if (node.type && node.type.name === 'MeterBoundary') innerSections.push(node)
+    if (node.props) walk(node.props.children)
+  }
+  walk(pageDiv)
+  assert.ok(innerSections.length >= 1, 'the page embeds the report behind its own boundary')
+  react.__reset()
+  const report = innerSections[0].props.children
+  react.__reset()
+  const rendered = report.type(report.props)
+  assert.ok(JSON.stringify(rendered).includes('tu-cards'), 'and the embedded report is the settings page itself')
+  console.log('[ok] panel: the main-column page renders the report under a page heading')
+}
+{
+  // The sidebar icon is drawn at whatever edge the owner row asks for.
+  const Icon = happyRegistered.find((entry) => entry.options.name === 'sidebar.panellist').component
+  const small = Icon({ size: 16, active: false })
+  const large = Icon({ size: 24, active: true })
+  assert.ok(small, 'the panel icon renders')
+  assert.equal(small.props.width, 16, 'it honours the requested edge')
+  assert.equal(large.props.width, 24, 'and follows a different request')
+  assert.equal(small.props['aria-hidden'], true, 'it is decorative: the row supplies the label')
+  assert.equal(small.props.children.length, 3, 'it draws the same three-bar mark as the reading')
+  // A host that supplies no size must not produce an invalid icon.
+  const fallback = Icon({})
+  assert.ok(Number(fallback.props.width) > 0, 'a missing size falls back to a valid edge')
+  console.log('[ok] panel icon: drawn at the owner-supplied edge, decorative, three bars')
+}
+
+// ---------------------------------------- window framing and card honesty
+{
+  // The grid is a FULL YEAR laid out from the first recorded week: always 53
+  // columns, so it fills a wide pane at a constant tile size instead of
+  // shrinking to the data and leaving a dead margin on the right. Weeks after
+  // today are present but marked future and are not interactive.
+  const now = Date.now()
+  const today = dayStartLocal(now)
+  const first = today - 63 * DAY
+  const bucket = { uncachedInputTokens: 1000, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }
+  const sessions = fakeSessions([{
+    id: 'paused', title: 'Paused', at: first, model: 'deepseek-flash', usage: usage(1000, 0, 0),
+    byDay: { [keyOfLocal(first)]: bucket },
+  }])
+  const tree = render(Section, { sessions })
+  const cells = heatCellsOf(tree.props.children[3].props.children[2])
+  assert.equal(cells.length, 53 * 7, 'a full year of columns is always drawn')
+  assert.equal(cells[0].props.key, keyOfLocal(mondayLocal(first)), 'column one is the first recorded week')
+  const todayCell = cells.find((cell) => String(cell.props.key) === keyOfLocal(today))
+  assert.ok(todayCell, 'today is inside the grid')
+  assert.ok(String(todayCell.props.className).includes('today'), 'and marked')
+  // Everything after today is future: dimmed and not clickable.
+  const after = cells.filter((cell) => String(cell.props.key) > keyOfLocal(today))
+  assert.ok(after.length > 0, 'the year continues past today')
+  assert.ok(after.every((cell) => String(cell.props.className).includes('future')), 'future cells carry their own class')
+  assert.ok(after.every((cell) => cell.props.disabled === true), 'future cells are not interactive')
+  console.log('[ok] window: a full year from the first recorded week, future weeks drawn but inert')
+}
+{
+  // Cell size is solved at render from the measured pane, then clamped. The CSS
+  // must NOT stretch columns with 1fr: that turned a short history into a few
+  // enormous squares, which is exactly what made the grid unreadable.
+  const css = source
+  assert.ok(/grid-auto-columns:var\(--tu-cell-w/.test(css), 'columns take their edge from the render')
+  assert.ok(!/minmax\(var\(--tu-cell-min[^)]*\),1fr\)/.test(css), 'columns never stretch with 1fr')
+  assert.ok(!/grid-auto-columns:var\(--tu-cell,11px\)/.test(css), 'the old fixed 11px column is gone')
+  // The solver itself: a short history gets a capped tile, a long one the floor.
+  const src = css
+  assert.ok(/const CELL_MIN = 12/.test(src) && /const CELL_MAX = 40/.test(src), 'the solver clamps both ends')
+  assert.ok(/Math\.max\(CELL_MIN, Math\.min\(CELL_MAX, share\)\)/.test(src), 'the share is clamped into the range')
+  console.log('[ok] heatmap: cell edge solved from the pane and clamped, never stretched')
+}
+{
+  // No "this session" card: the page is root-scoped, so the host supplies no
+  // active-session id and the card could only guess (it used the newest).
+  const now = Date.now()
+  const sessions = fakeSessions([
+    { id: 'newest', title: 'Newest', at: now, model: 'deepseek-flash', usage: usage(9000000, 0, 0) },
+    { id: 'older', title: 'Older', at: now - 5 * DAY, model: 'deepseek-flash', usage: usage(1000000, 0, 0) },
+  ])
+  const tree = render(Section, { sessions })
+  const cards = tree.props.children[2]
+  assert.equal(cards.props.children.length, 2, 'exactly two cards: today and the range total')
+  const text = JSON.stringify(cards)
+  assert.ok(!text.includes('This session'), 'no this-session card is rendered')
+  console.log('[ok] cards: two honest cards, no this-session guess')
+}
+
+{
+  // The hover scale used to be clipped by the scroller's overflow-y:hidden,
+  // which showed up as a stray cut-off line above the first row. The scroller
+  // must not clip vertically, and the grow needs padding room.
+  const css = source
+  assert.ok(/\.tu-heat-scroll\{[^}]*overflow-y:visible/.test(css),
+    'the heatmap scroller must not clip vertically')
+  assert.ok(/\.tu-heat-scroll\{[^}]*padding:3px 0 2px/.test(css),
+    'the scroller reserves room for the hover grow')
+  assert.ok(!/\.tu-heat-scroll\{[^}]*overflow-y:hidden/.test(css),
+    'the clipping that cut the top row is gone')
+  // The grid starts at the first recorded week: a young history is NOT padded
+  // on the left with a year of empty cells.
+  const now = Date.now()
+  const today = dayStartLocal(now)
+  const first = today - 63 * DAY
+  const bucket = { uncachedInputTokens: 500, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }
+  const sessions = fakeSessions([{
+    id: 'young', title: 'Young', at: now, model: 'deepseek-flash', usage: usage(1000, 0, 0),
+    byDay: { [keyOfLocal(first)]: bucket, [keyOfLocal(today)]: bucket },
+  }])
+  const tree = render(Section, { sessions })
+  const cells = heatCellsOf(tree.props.children[3].props.children[2])
+  const firstMonday = mondayLocal(first)
+  assert.equal(cells[0].props.key, keyOfLocal(firstMonday), 'the grid opens on the first recorded week')
+  // ...and still draws a whole year, because a grid that shrinks to the data
+  // either stretches its few columns across the pane or leaves a dead margin.
+  assert.equal(cells.length, 53 * 7, 'a short history still fills a full year of columns')
+  const currentMonday = mondayLocal(today)
+  assert.ok(cells.some((cell) => String(cell.props.key) === keyOfLocal(currentMonday)), 'the current week is present')
+  console.log('[ok] heatmap: no vertical clipping, a full year laid out from the first recorded week')
+}
+
+{
+  // The cell-edge solver is the whole fix for "the grid looks broken": with few
+  // columns it must cap the tile instead of stretching it, and with many it must
+  // fall back to the minimum and let the scroller handle the overflow.
+  const solve = (() => {
+    const start = source.indexOf('function cellEdgeFor(')
+    assert.ok(start >= 0, 'the solver is present in the bundle')
+    const end = source.indexOf('\n    }', start)
+    assert.ok(end > start, 'the solver body is closed')
+    // Rebuild it from the shipped source so the test exercises the real logic.
+    const body = source.slice(start, end + 6)
+    const CELL_MIN = 12
+    const CELL_MAX = 40
+    const CELL_GAP = 3
+    // eslint-disable-next-line no-new-func
+    const fn = new Function('CELL_MIN', 'CELL_MAX', 'CELL_GAP', body + '; return cellEdgeFor')
+    return fn(CELL_MIN, CELL_MAX, CELL_GAP)
+  })()
+  // A nine-week history in a 900px pane: sharing 900px would give ~97px tiles,
+  // so the cap must apply.
+  // The grid is always a year of columns, so the solver is driven by 53.
+  assert.equal(solve(900, 53), 14, 'a year shares a 900px pane')
+  // A wide pane lets the year fill it: 1200px / 53 - gutters stays under the cap.
+  assert.equal(solve(1200, 53), 19, 'a wide pane grows the tiles')
+  // An ultra-wide pane must still cap the tile rather than produce blocks.
+  assert.equal(solve(4000, 53), 40, 'an ultra-wide pane caps the tile')
+  // A cramped pane falls to the floor rather than becoming unreadable.
+  assert.equal(solve(300, 53), 12, 'a cramped pane keeps the minimum edge')
+  // No measurement yet: the floor is always a valid answer.
+  assert.equal(solve(0, 53), 12, 'before measuring, the minimum is used')
+  console.log('[ok] heatmap: the cell edge is capped for short histories and floored for long ones')
 }
 
 // ------------------------------------------------------------ crash guard

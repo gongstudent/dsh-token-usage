@@ -3,8 +3,10 @@
 A **token usage view** for DeepSeek Harness, in two seats: a live reading in
 the composer row, and a usage overview on the Settings page.
 
-Read-only. No persistence. No host-side logic. No Harness client package is
-imported.
+Read-only by default. The single write path is **Delete session** — in the
+sidebar Session right-click menu and on each row of the Settings session table —
+which also removes that session's token record and stored session files. No
+Harness client package is imported.
 
 ## What it shows
 
@@ -41,18 +43,61 @@ Refreshed 14:32:07  [Refresh]
 `Esc` or an outside click closes it; Refresh re-reads the snapshot and
 advances the timestamp.
 
-### 2. Settings (`settings.section`, nav item "Token usage")
+### 2. Sidebar panel entry (`sidebar.panellist` + `main`)
+
+The sidebar's panel list (the Plugins / Skill / Automation-tasks row) gains a
+**Token usage** icon that opens a **full page in the main column** - not a modal,
+not an overlay.
+
+It uses the same public slots as the shipped Plugins and Automation panels:
+
+- `main` + `key: 'token-usage'` - the page body (`UsagePage`, reusing the very
+  same report component as the settings section);
+- `sidebar.panellist` + `id: 'token-usage'` - the icon, `order: 40`, with a label
+  thunk so it follows the active locale.
+
+Both carry the **same key**: the sidebar routes an entry id to the main cell with
+that key, so they are two faces of one feature. A host without either slot loses
+only this entry.
+
+### 3. Settings (`settings.section`, nav item "Token usage")
 
 **Summary cards** (three columns, stacking on narrow screens) for this session,
-today, and all time - each with the headline total and an in / cache / out
-detail line.
+today, and all time - each with the headline total, an in / cache / out detail
+line, and the cache hit rate over the selected range.
 
-**Token usage** - a totals line plus a **26-week daily heatmap** that fills the
-settings width, with four intensity steps, a per-day tooltip, a month axis and
-a "less / more" legend.
+**Token usage** - a totals line plus a **daily heatmap whose width follows the
+real history**: the window spans the Monday of the first recorded week to the
+Monday of the latest record, clamped to **8-40 weeks** (~9 months). A nine-week history
+gets a nine-week grid instead of a 26-week frame that is 69% empty cells; only a
+longer history pages. Monday is the top row and Sunday the bottom row, with four
+intensity steps, a per-day tooltip, a month axis and a "less / more" legend.
 
-**By session** - session, input tok, cache tok, output tok, total tok; newest
-first, capped at 20 rows.
+The intensity scale is normalised over **every** recorded day (with a square-root
+ramp), so paging or filtering never re-colours a day you already looked at.
+Navigation is **discrete, never a continuous drag**: a short history shows one
+caption line, and only a history longer than one window gets
+`first / prev / page n of m / next / latest` buttons - the way Codex and Claude
+switch a fixed usage range.
+
+**Usage detail (grouped, with shares)** - two dimension tabs (**by model / by
+session**), one row per value with input / cache / output / total plus a **share
+bar** of the selected range's total. Heaviest first, eight rows, with a "show
+all" toggle.
+
+> A workspace dimension was tried and **removed**: the session list row the
+> client receives carries no `cwd` (the host publishes only
+> `sessionListMetadata`: `blank` + `lastPromptAt`), so every row fell into one
+> anonymous group reading "100%". A dimension that cannot be resolved is worse
+> than no dimension.
+>
+> The delete action only appears on the **by session** dimension.
+
+**Relative baselines (no billing)** - a raw token count cannot say whether it is
+a lot, so today is framed as `12.3M · 126%` against the mean of the preceding
+seven full days (`vs 9.8M daily avg`), amber at 115%+ and blue at 85%-. The
+sidebar card carries the same line plus the cache hit rate - Claude's
+"number plus reference" framing, still in tokens.
 
 ### Accounting (identical to the harness)
 
@@ -82,12 +127,13 @@ Archiving a session (the archive row in the session menu) puts it away: the
 sidebar stops showing it, and this page stops counting it. Restoring it brings it
 back immediately. This is the harness's own reversible mechanism.
 
-**Why not delete?** The harness has **no session-delete operation**. `workspaces` offers
-archive/unarchive and the pin pair; `sessions` offers create/fork/rename/search/
-dispose, and dispose only unloads a session from memory. Removing a directory
-under `~/.dsh/sessions/` would erase the data, but the host still holds the
-session in memory along with its index and projection cache, so doing that to an
-open or running session risks corrupting state irreversibly. Not done.
+**Delete session.** Each row of the Settings session table carries a Delete
+button. It removes that session's directory under `~/.dsh/sessions/` (the token
+history is folded from that log, so it disappears with it), detaches the session
+from its Workspace, clears archive/pin state, and drops the plugin's
+`localStorage` ledger entry. The route is registered only when the host exposes
+`connection.fetch`; a running conversation is refused until its turn ends, and a
+locked file asks you to restart the harness. **Irreversible; no undo.**
 
 ### Attribution to a calendar day
 

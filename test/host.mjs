@@ -11,6 +11,8 @@
 import assert from 'node:assert/strict'
 import { pathToFileURL } from 'node:url'
 import { dirname, join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { mkdtemp, mkdir, rm, stat, writeFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -32,7 +34,13 @@ function makeCtx(options = {}) {
     inject(deps, callback) {
       injections.push(deps)
       if (options.neverFires === true) return () => {}
-      callback(options.service === false ? {} : { sessionProjections: { register: (def) => registered.push(def) } })
+      if (deps[0] === 'sessionProjections') {
+        callback(options.service === false ? {} : { sessionProjections: { register: (def) => registered.push(def) } })
+      } else if (deps[0] === 'connection') {
+        callback(options.connection === undefined ? {} : { connection: options.connection })
+      } else {
+        callback({})
+      }
       return () => {}
     },
   }
@@ -42,8 +50,9 @@ function makeCtx(options = {}) {
 {
   const { ctx, injections, registered } = makeCtx()
   host.apply(ctx)
-  assert.equal(injections.length, 1, 'apply asks for exactly one service')
-  assert.equal(Array.from(injections[0]).join(','), 'sessionProjections', 'and it is the projection registry')
+  assert.equal(injections.length, 2, 'apply asks for both optional seams separately')
+  assert.equal(Array.from(injections[0]).join(','), 'sessionProjections', 'first is the projection registry')
+  assert.equal(Array.from(injections[1]).join(','), 'connection', 'then the optional Connection fetch seam')
   assert.equal(registered.length, 1, 'one projection is registered')
 
   const def = registered[0]
@@ -107,6 +116,59 @@ function makeCtx(options = {}) {
     '2026-10-09': { uncachedInputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
   }, 'junk counts become zero')
   console.log('[ok] host: the state schema rejects junk instead of publishing it')
+}
+
+{
+  // The destructive route: remove exactly one stored session directory, detach
+  // it from its Workspace and announce the removal to the client list.
+  const routes = []
+  const events = []
+  const calls = { detach: [], unarchive: [], unpin: [] }
+  const ctx = {
+    inject(deps, callback) {
+      if (deps[0] === 'sessionProjections') callback({ sessionProjections: { register() {} } })
+      else if (deps[0] === 'connection') callback({ connection: this.connection })
+      else callback({})
+    },
+    connection: undefined,
+    effect(fn) { const dispose = fn(); return typeof dispose === 'function' ? dispose : () => {} },
+    get(name) {
+      if (name === 'workspaceRegistry') return {
+        list() { return [{ sessionIds: ['session-host-test'], async detachSession(id) { calls.detach.push(id) } }] },
+        async unarchiveSession(id) { calls.unarchive.push(id) },
+        async unpinSession(id) { calls.unpin.push(id) },
+      }
+      if (name === 'agents') return { get() { return undefined } }
+      return undefined
+    },
+    emit(name, id) { events.push([name, id]) },
+    logger: { warn() {} },
+  }
+  const base = await mkdtemp(join(tmpdir(), 'dsh-token-usage-host-'))
+  const sessionDir = join(base, 'sessions', '--proj--', 'session-host-test')
+  const artifact = join(sessionDir, 'session.v4.jsonl.zstd')
+  await mkdir(sessionDir, { recursive: true })
+  await writeFile(artifact, 'test')
+  ctx.connection = { fetch: { register(route) { routes.push(route); return async () => {} } } }
+  ctx.get = ((original) => (name) => name === 'sessionPersistence'
+    ? { async stat(id) { return id === 'session-host-test' ? { location: { kind: 'jsonl', path: artifact } } : undefined } }
+    : original(name))(ctx.get)
+  host.apply(ctx)
+  assert.equal(routes.length, 1, 'the delete route registers when Connection is present')
+  assert.equal(routes[0].path, '/api/token-usage/delete-session', 'the route path is stable for the client')
+  assert.deepEqual(Array.from(routes[0].methods), ['POST'], 'the route accepts POST only')
+  const response = await routes[0].fetch(new Request('http://local/api/token-usage/delete-session', {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sessionId: 'session-host-test' }),
+  }))
+  assert.equal(response.status, 200, 'the delete succeeds')
+  assert.deepEqual(await response.json(), { ok: true, sessionId: 'session-host-test' })
+  await assert.rejects(() => stat(artifact), 'the stored session artifact is gone')
+  assert.deepEqual(calls.detach, ['session-host-test'], 'the session leaves its Workspace')
+  assert.deepEqual(calls.unarchive, ['session-host-test'], 'the archive set is cleared')
+  assert.deepEqual(calls.unpin, ['session-host-test'], 'the pin set is cleared')
+  assert.deepEqual(events, [['api-session/removed', 'session-host-test']], 'the client list is told to drop the row')
+  await rm(base, { recursive: true, force: true })
+  console.log('[ok] host: delete removes the session file, Workspace entry and list row')
 }
 
 {

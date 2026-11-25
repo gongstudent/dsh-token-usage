@@ -1,7 +1,7 @@
 {
   "name": "dsh-token-usage",
   "version": "0.1.0",
-  "description": "DSH token 用量查看器：在当前会话的输入框区域显示本会话 token 用量（四桶 + 缓存命中率 + 上下文占用），点击展开明细。只读、无持久化、无宿主业务逻辑。Read-only per-session token usage readout for DeepSeek Harness.",
+  "description": "DSH token 用量查看器：输入框读数、侧栏卡片、侧栏图标打开的主面板报表（按天热图 + 按模型/会话分组占比 + 相对基准），支持删除会话（连同 token 记录和会话文件）。Token usage readout for DeepSeek Harness: composer reading, sidebar card, and a main-column usage report with a daily heatmap, grouped share tables and relative baselines, plus session deletion.",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
