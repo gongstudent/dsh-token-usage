@@ -123,7 +123,7 @@ function makeCtx(options = {}) {
   // it from its Workspace and announce the removal to the client list.
   const routes = []
   const events = []
-  const calls = { detach: [], unarchive: [], unpin: [] }
+  const calls = { detach: [], unarchive: [], unpin: [], cacheDelete: [] }
   const ctx = {
     inject(deps, callback) {
       if (deps[0] === 'sessionProjections') callback({ sessionProjections: { register() {} } })
@@ -139,6 +139,11 @@ function makeCtx(options = {}) {
         async unpinSession(id) { calls.unpin.push(id) },
       }
       if (name === 'agents') return { get() { return undefined } }
+      // The projection cache owns the derived rows; its table must be told the
+      // session is gone, or the cache re-seeds a row the list already dropped.
+      if (name === 'sessionProjectionCache') return {
+        table: { async delete(id) { calls.cacheDelete.push(id) } },
+      }
       return undefined
     },
     emit(name, id) { events.push([name, id]) },
@@ -166,6 +171,7 @@ function makeCtx(options = {}) {
   assert.deepEqual(calls.detach, ['session-host-test'], 'the session leaves its Workspace')
   assert.deepEqual(calls.unarchive, ['session-host-test'], 'the archive set is cleared')
   assert.deepEqual(calls.unpin, ['session-host-test'], 'the pin set is cleared')
+  assert.deepEqual(calls.cacheDelete, ['session-host-test'], 'the derived projection-cache row is dropped with the log')
   assert.deepEqual(events, [['api-session/removed', 'session-host-test']], 'the client list is told to drop the row')
   await rm(base, { recursive: true, force: true })
   console.log('[ok] host: delete removes the session file, Workspace entry and list row')
